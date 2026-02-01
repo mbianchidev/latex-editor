@@ -100,7 +100,7 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ## 🙏 Acknowledgments
 
-- Inspired by [Overleaf](https://www.overleaf.com/)
+- Inspired by [Overleaf](https://www.overleaf.com/) but without being a paid product at all
 - Built with modern web technologies
 - Powered by the LaTeX community
 
@@ -112,4 +112,4 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ---
 
-**Made with ❤️ by the open source community**
+**Made with ❤️ by mbianchidev**
