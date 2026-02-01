@@ -7,6 +7,51 @@
 // CONFIGURATION & STATE
 // ============================================
 
+// ============================================
+// CONFIGURATION & STATE
+// ============================================
+
+// LaTeX math commands to preserve during HTML conversion
+const LATEX_MATH_COMMANDS = [
+  // Greek letters
+  'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'varepsilon', 'zeta', 'eta',
+  'theta', 'vartheta', 'iota', 'kappa', 'lambda', 'mu', 'nu', 'xi', 'pi',
+  'varpi', 'rho', 'varrho', 'sigma', 'varsigma', 'tau', 'upsilon', 'phi',
+  'varphi', 'chi', 'psi', 'omega',
+  'Gamma', 'Delta', 'Theta', 'Lambda', 'Xi', 'Pi', 'Sigma', 'Upsilon',
+  'Phi', 'Psi', 'Omega',
+  // Operators
+  'int', 'sum', 'prod', 'coprod', 'bigcup', 'bigcap', 'bigoplus', 'bigotimes',
+  'oint', 'iint', 'iiint',
+  // Functions
+  'sqrt', 'frac', 'dfrac', 'tfrac', 'binom',
+  'sin', 'cos', 'tan', 'cot', 'sec', 'csc',
+  'sinh', 'cosh', 'tanh', 'coth',
+  'arcsin', 'arccos', 'arctan',
+  'log', 'ln', 'lg', 'exp',
+  'lim', 'limsup', 'liminf', 'sup', 'inf', 'max', 'min',
+  'det', 'dim', 'ker', 'deg', 'gcd', 'hom',
+  // Symbols
+  'infty', 'partial', 'nabla', 'pm', 'mp', 'times', 'div', 'cdot',
+  'ast', 'star', 'circ', 'bullet', 'cap', 'cup', 'vee', 'wedge',
+  'oplus', 'ominus', 'otimes', 'oslash', 'odot',
+  'leq', 'geq', 'neq', 'equiv', 'sim', 'simeq', 'approx', 'cong',
+  'propto', 'subset', 'supset', 'subseteq', 'supseteq', 'in', 'notin',
+  'forall', 'exists', 'nexists', 'emptyset',
+  'to', 'rightarrow', 'leftarrow', 'leftrightarrow', 'Rightarrow', 'Leftarrow',
+  'Leftrightarrow', 'mapsto',
+  // Accents and modifiers
+  'hat', 'bar', 'tilde', 'vec', 'dot', 'ddot', 'overline', 'underline',
+  'overbrace', 'underbrace',
+  // Spacing
+  'quad', 'qquad',
+  // Text in math mode
+  'text', 'mathrm', 'mathbf', 'mathit', 'mathsf', 'mathtt', 'mathcal',
+  'mathbb', 'mathfrak',
+  // Delimiters
+  'left', 'right', 'big', 'Big', 'bigg', 'Bigg'
+];
+
 const DEFAULT_TEMPLATE = `\\documentclass{article}
 \\usepackage[utf8]{inputenc}
 \\usepackage{amsmath}
@@ -328,9 +373,8 @@ function convertLatexToHTML(latex) {
   
   // Clean up remaining simple LaTeX commands (but preserve math)
   content = content.replace(/\\([a-zA-Z]+)(\{([^}]*)\})?/g, (match, cmd, full, arg) => {
-    // Preserve math-related commands
-    if (['int', 'sum', 'prod', 'sqrt', 'frac', 'alpha', 'beta', 'gamma', 'infty', 'pi', 
-         'sin', 'cos', 'tan', 'log', 'exp', 'lim', 'partial', 'nabla'].includes(cmd)) {
+    // Preserve math-related commands using the whitelist
+    if (LATEX_MATH_COMMANDS.includes(cmd)) {
       return match;
     }
     return arg || '';
@@ -538,7 +582,9 @@ function applyZoom() {
   if (iframe) {
     iframe.style.transform = `scale(${state.zoom})`;
     iframe.style.transformOrigin = 'top center';
-    iframe.style.marginBottom = `${(state.zoom - 1) * 11 * 96}px`; // Adjust spacing
+    // Adjust spacing: 11 inches (A4 page height) * 96 DPI = pixels
+    const pageHeightPixels = 11 * 96;
+    iframe.style.marginBottom = `${(state.zoom - 1) * pageHeightPixels}px`;
   }
 }
 
