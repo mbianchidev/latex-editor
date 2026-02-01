@@ -98,14 +98,13 @@
     <main class="main-content">
         <!-- Editor Panel -->
         <div class="editor-panel" id="editorPanel">
-            <!-- File Tree (hidden by default) -->
-            <div class="file-tree" id="fileTree" style="display: none;">
+            <!-- File Tree (hidden by default, shown when project loaded) -->
+            <div class="file-tree" id="fileTree">
                 <div class="file-tree-header">
-                    <h3 class="file-tree-title">Project Files</h3>
-                    <button class="icon-btn" id="closeFileTree" title="Close file tree">
+                    <h3 class="file-tree-title">Files</h3>
+                    <button class="icon-btn" id="closeFileTree" title="Hide file tree">
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="18" y1="6" x2="6" y2="18"/>
-                            <line x1="6" y1="6" x2="18" y2="18"/>
+                            <polyline points="15 18 9 12 15 6"/>
                         </svg>
                     </button>
                 </div>
@@ -114,27 +113,30 @@
                 </div>
             </div>
             
-            <div class="panel-header">
-                <h2 class="panel-title" id="currentFileName">LaTeX Source</h2>
-                <div class="panel-actions">
-                    <button class="icon-btn" id="toggleFileTree" title="Toggle file tree" style="display: none;">
-                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                        </svg>
-                    </button>
-                    <button class="icon-btn" id="compileBtn" title="Compile (Ctrl+Enter)">
-                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polygon points="5 3 19 12 5 21 5 3"/>
-                        </svg>
-                    </button>
+            <!-- Editor content wrapper -->
+            <div class="editor-panel-content">
+                <div class="panel-header">
+                    <h2 class="panel-title" id="currentFileName">LaTeX Source</h2>
+                    <div class="panel-actions">
+                        <button class="icon-btn" id="toggleFileTree" title="Show file tree" style="display: none;">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                            </svg>
+                        </button>
+                        <button class="icon-btn" id="compileBtn" title="Compile (Ctrl+Enter)">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="5 3 19 12 5 21 5 3"/>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
-            </div>
-            <div class="editor-container">
-                <textarea id="editor" spellcheck="false"></textarea>
-            </div>
-            <div class="status-bar">
-                <span class="status-item" id="statusText">Ready</span>
-                <span class="status-item" id="lineCol">Line 1, Col 1</span>
+                <div class="editor-container">
+                    <textarea id="editor" spellcheck="false"></textarea>
+                </div>
+                <div class="status-bar">
+                    <span class="status-item" id="statusText">Ready</span>
+                    <span class="status-item" id="lineCol">Line 1, Col 1</span>
+                </div>
             </div>
         </div>
 

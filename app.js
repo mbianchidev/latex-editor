@@ -932,10 +932,9 @@ async function handleZipUpload(event) {
     
     // Build and show file tree
     buildFileTree(files);
-    elements.fileTree.style.display = 'flex';
+    elements.fileTree.classList.add('visible');
     elements.toggleFileTreeBtn.style.display = 'inline-block';
     elements.downloadZipBtn.style.display = 'inline-block';
-    elements.editorPanel.classList.add('has-file-tree');
     
     showSuccessToast(`Loaded ${Object.keys(files).length} files from project`);
     showStatus('Project loaded', 'success');
@@ -996,7 +995,8 @@ function renderTreeNode(node, container, path) {
                      (isFile ? '' : ' folder expanded') +
                      (isFile && name.endsWith('.tex') ? ' tex' : '') +
                      (isFile && name.match(/\.(png|jpg|jpeg|gif|svg)$/i) ? ' image' : '') +
-                     (isFile && name.endsWith('.pdf') ? ' pdf' : '');
+                     (isFile && name.endsWith('.pdf') ? ' pdf' : '') +
+                     (isFile && name.match(/\.(ttf|otf|woff|woff2)$/i) ? ' font' : '');
     
     if (isFile && fullPath === state.currentFile) {
       item.classList.add('active');
@@ -1070,12 +1070,14 @@ function openFile(path, itemElement) {
  * Toggle file tree visibility
  */
 function toggleFileTree(show) {
-  if (show === false || elements.fileTree.style.display === 'flex') {
-    elements.fileTree.style.display = 'none';
-    elements.editorPanel.classList.remove('has-file-tree');
+  const isVisible = elements.fileTree.classList.contains('visible');
+  
+  if (show === false || isVisible) {
+    elements.fileTree.classList.remove('visible');
+    elements.toggleFileTreeBtn.title = 'Show file tree';
   } else {
-    elements.fileTree.style.display = 'flex';
-    elements.editorPanel.classList.add('has-file-tree');
+    elements.fileTree.classList.add('visible');
+    elements.toggleFileTreeBtn.title = 'Hide file tree';
   }
 }
 
