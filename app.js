@@ -1013,7 +1013,7 @@ function renderTreeNode(node, container, path) {
     
     if (isFile) {
       // Click handler for files
-      item.addEventListener('click', () => openFile(fullPath));
+      item.addEventListener('click', () => openFile(fullPath, item));
     } else {
       // Folder - create children container
       const children = document.createElement('div');
@@ -1037,7 +1037,7 @@ function renderTreeNode(node, container, path) {
 /**
  * Open a file from the project
  */
-function openFile(path) {
+function openFile(path, itemElement) {
   if (!state.projectFiles[path]) return;
   
   // Save current file content
@@ -1055,7 +1055,9 @@ function openFile(path) {
   document.querySelectorAll('.file-tree-item').forEach(item => {
     item.classList.remove('active');
   });
-  event.target.closest('.file-tree-item').classList.add('active');
+  if (itemElement) {
+    itemElement.classList.add('active');
+  }
   
   // Compile if this is the main file
   if (path === state.mainFile) {
