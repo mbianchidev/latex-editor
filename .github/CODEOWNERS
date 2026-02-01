@@ -1,0 +1,24 @@
+# Global rule commented out - specific rules below provide more granular control
+# Uncomment if you want all files to default to @mbianchidev when no other rule matches
+# * @mbianchidev
+
+# Core components (when they exist)
+/src/core/ @mbianchidev
+/src/components/ @mbianchidev
+
+# Documentation
+*.md @mbianchidev
+/docs/ @mbianchidev
+
+# Configuration files
+*.json @mbianchidev
+*.config.js @mbianchidev
+*.config.ts @mbianchidev
+
+# GitHub workflows and templates
+/.github/ @mbianchidev
+
+# Build and deployment
+/scripts/ @mbianchidev
+Dockerfile @mbianchidev
+docker-compose.yml @mbianchidev

@@ -1,432 +1,295 @@
-# Contributing to LaTeX Editor
+# Contributing to latex-editor
 
-Thank you for your interest in contributing to LaTeX Editor! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to latex-editor! We welcome contributions from the community and are excited to have you join us in building an open source LaTeX editor.
 
 ## Table of Contents
 
 - [Code of Conduct](#code-of-conduct)
 - [Getting Started](#getting-started)
-- [Development Setup](#development-setup)
-- [Project Structure](#project-structure)
-- [Design System](#design-system)
-- [Coding Standards](#coding-standards)
+- [How to Contribute](#how-to-contribute)
+- [Development Workflow](#development-workflow)
+- [Code Standards](#code-standards)
+- [Commit Guidelines](#commit-guidelines)
 - [Pull Request Process](#pull-request-process)
-- [Areas for Contribution](#areas-for-contribution)
+- [Issue Guidelines](#issue-guidelines)
+- [Community](#community)
 
 ## Code of Conduct
 
-### Our Pledge
-
-We are committed to providing a welcoming and inclusive environment for all contributors, regardless of background or identity.
-
-### Expected Behavior
-
-- Use welcoming and inclusive language
-- Be respectful of differing viewpoints
-- Accept constructive criticism gracefully
-- Focus on what's best for the community
-- Show empathy toward others
-
-### Unacceptable Behavior
-
-- Harassment, trolling, or discriminatory comments
-- Personal or political attacks
-- Publishing others' private information
-- Other conduct inappropriate in a professional setting
+This project and everyone participating in it is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to the project maintainers.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Modern web browser (Chrome, Firefox, Edge, Safari)
-- Text editor or IDE
-- Basic knowledge of HTML, CSS, and JavaScript
-- Familiarity with LaTeX (for content-related contributions)
-- Git for version control
+Before you begin, ensure you have the following installed:
 
-### First Contribution
+* Git
+* Node.js (version will be specified once the project structure is finalized)
+* A modern web browser for testing
+* A code editor (VS Code, WebStorm, or your preference)
+
+### Setting Up Your Development Environment
 
 1. **Fork the repository**
-2. **Clone your fork**:
+   
+   Click the "Fork" button at the top right of the repository page.
+
+2. **Clone your fork**
+   
    ```bash
-   git clone https://github.com/yourusername/latex-editor.git
+   git clone https://github.com/YOUR_USERNAME/latex-editor.git
    cd latex-editor
    ```
-3. **Create a branch**:
+
+3. **Add upstream remote**
+   
+   ```bash
+   git remote add upstream https://github.com/mbianchidev/latex-editor.git
+   ```
+
+4. **Install dependencies** (once project structure is in place)
+   
+   ```bash
+   npm install
+   # or
+   yarn install
+   ```
+
+5. **Create a branch for your work**
+   
    ```bash
    git checkout -b feature/your-feature-name
    ```
-4. **Make your changes**
-5. **Test thoroughly**
-6. **Commit and push**:
-   ```bash
-   git add .
-   git commit -m "Add: your feature description"
-   git push origin feature/your-feature-name
-   ```
-7. **Open a Pull Request**
 
-## Development Setup
+## How to Contribute
 
-### Local Development
+### Types of Contributions
 
-1. **Start a local server**:
-   ```bash
-   # Python
-   python3 -m http.server 8080
-   
-   # Node.js
-   npx serve
-   
-   # PHP
-   php -S localhost:8080
-   ```
+We welcome many types of contributions:
 
-2. **Open in browser**:
-   Navigate to `http://localhost:8080`
+* 🐛 **Bug fixes**: Fix issues reported in GitHub Issues
+* ✨ **New features**: Implement new functionality
+* 📝 **Documentation**: Improve or add documentation
+* 🎨 **UI/UX improvements**: Enhance the user interface and experience
+* 🧪 **Tests**: Add or improve test coverage
+* ♿ **Accessibility**: Make the editor more accessible
+* 🌐 **Internationalization**: Add or improve translations
+* 🔧 **Tooling**: Improve development tools and processes
 
-3. **Make changes**:
-   - Edit `index.html`, `styles.css`, or `app.js`
-   - Refresh browser to see changes
-   - Use browser DevTools for debugging
+### First-Time Contributors
+
+New to open source? Look for issues labeled:
+
+* `good first issue` - Good for newcomers
+* `help wanted` - Extra attention needed
+* `documentation` - Documentation improvements
+
+## Development Workflow
+
+### Running the Development Server
+
+```bash
+# Start the development server (command will be added when project structure is ready)
+npm run dev
+```
+
+### Building the Project
+
+```bash
+# Build for production (command will be added when project structure is ready)
+npm run build
+```
+
+### Running Tests
+
+```bash
+# Run all tests (command will be added when project structure is ready)
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+```
+
+### Linting and Formatting
+
+```bash
+# Lint your code (command will be added when project structure is ready)
+npm run lint
+
+# Format your code
+npm run format
+```
+
+## Code Standards
+
+### General Guidelines
+
+* Write clear, readable, and maintainable code
+* Follow the existing code style and patterns
+* Add comments for complex logic
+* Keep functions small and focused on a single responsibility
+* Use meaningful variable and function names
+
+### JavaScript/TypeScript Style
+
+* Use ES6+ features where appropriate
+* Prefer `const` over `let`, avoid `var`
+* Use arrow functions for callbacks
+* Use async/await for asynchronous code
+* Follow ESLint configuration (will be added to the project)
 
 ### Testing
 
-Before submitting a PR, test your changes:
+* Write tests for new features
+* Ensure existing tests pass before submitting PR
+* Aim for good test coverage, especially for critical paths
+* Write both unit tests and integration tests where appropriate
 
-1. **Browser Testing**:
-   - Chrome/Edge
-   - Firefox
-   - Safari
-   - Mobile browsers (responsive mode)
+### Accessibility
 
-2. **Feature Testing**:
-   - Create new documents
-   - Compile various LaTeX examples
-   - Download PDF and .tex files
-   - Test zoom controls
-   - Verify resizable panels work
-   - Check auto-save functionality
+* Use semantic HTML elements
+* Provide alt text for images
+* Ensure keyboard navigation works
+* Test with screen readers when possible
+* Follow WCAG 2.1 guidelines
 
-3. **Error Testing**:
-   - Test with invalid LaTeX
-   - Test with very large documents
-   - Test with empty document
-   - Verify error messages appear correctly
+## Commit Guidelines
 
-## Project Structure
+We follow the [Conventional Commits](https://www.conventionalcommits.org/) specification:
 
 ```
-latex-editor/
-├── index.html          # Main HTML structure
-│   ├── Header (logo, buttons)
-│   ├── Main content (editor + preview)
-│   ├── Loading overlay
-│   └── Toast notifications
-│
-├── styles.css          # Complete design system
-│   ├── CSS Custom Properties
-│   ├── Reset & Base Styles
-│   ├── Component Styles
-│   ├── Layout
-│   └── Responsive Design
-│
-├── app.js              # Application logic
-│   ├── State Management
-│   ├── Editor Initialization
-│   ├── LaTeX Compilation
-│   ├── PDF Generation
-│   ├── UI Interactions
-│   └── Local Storage
-│
-├── README.md           # Project overview
-├── GUIDE.md            # User guide
-├── CONTRIBUTING.md     # This file
-└── LICENSE             # MIT License
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
 ```
 
-## Design System
+### Types
 
-### Color Palette
+* `feat`: A new feature
+* `fix`: A bug fix
+* `docs`: Documentation only changes
+* `style`: Code style changes (formatting, missing semicolons, etc.)
+* `refactor`: Code change that neither fixes a bug nor adds a feature
+* `perf`: Performance improvements
+* `test`: Adding or updating tests
+* `chore`: Changes to build process or auxiliary tools
 
-```css
-/* Primary Colors */
---color-cream: #FAF8F3;      /* Background */
---color-accent: #6B9B97;     /* Primary actions */
---color-ink: #2A2724;        /* Text */
+### Examples
 
-/* Semantic Colors */
---color-success: #6B9B7A;
---color-warning: #C89968;
---color-error: #B56C6C;
---color-info: #6B7F9B;
 ```
+feat(editor): add syntax highlighting for LaTeX commands
 
-### Typography
+fix(preview): resolve rendering issue with mathematical equations
 
-```css
---font-serif: 'Merriweather', Georgia, serif;
---font-mono: 'JetBrains Mono', 'Courier New', monospace;
---font-sans: 'Source Sans 3', -apple-system, sans-serif;
+docs(readme): update installation instructions
+
+test(parser): add unit tests for LaTeX parser
 ```
-
-### Spacing Scale
-
-```css
---space-1: 0.25rem;   /* 4px */
---space-2: 0.5rem;    /* 8px */
---space-3: 0.75rem;   /* 12px */
---space-4: 1rem;      /* 16px */
---space-6: 1.5rem;    /* 24px */
---space-8: 2rem;      /* 32px */
-```
-
-### Design Principles
-
-1. **Refined Editorial**: Inspired by academic journals
-2. **Professional**: Clean and uncluttered
-3. **Accessible**: High contrast, readable fonts
-4. **Consistent**: Use design system variables
-5. **Subtle**: Elegant animations, not flashy
-
-## Coding Standards
-
-### HTML
-
-```html
-<!-- Use semantic HTML -->
-<header class="header">
-  <nav class="navigation">
-    <!-- Navigation items -->
-  </nav>
-</header>
-
-<!-- Meaningful class names -->
-<button class="btn btn-primary">
-  <svg class="icon">...</svg>
-  Button Text
-</button>
-
-<!-- Accessibility attributes -->
-<button aria-label="Close dialog" title="Close">
-  ×
-</button>
-```
-
-### CSS
-
-```css
-/* Use CSS custom properties */
-.button {
-  background: var(--color-accent);
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-md);
-}
-
-/* BEM-like naming for complex components */
-.toast {
-  /* Base styles */
-}
-
-.toast--error {
-  /* Modifier styles */
-}
-
-.toast__icon {
-  /* Element styles */
-}
-
-/* Mobile-first responsive design */
-.component {
-  /* Mobile styles */
-}
-
-@media (min-width: 768px) {
-  .component {
-    /* Tablet and desktop styles */
-  }
-}
-```
-
-### JavaScript
-
-```javascript
-// Use descriptive variable names
-const editorContent = document.getElementById('editor');
-
-// Use async/await for promises
-async function compileLatex() {
-  try {
-    const result = await compile();
-    return result;
-  } catch (error) {
-    handleError(error);
-  }
-}
-
-// Add comments for complex logic
-/**
- * Converts LaTeX to HTML
- * @param {string} latex - The LaTeX source code
- * @returns {string} HTML representation
- */
-function convertLatexToHTML(latex) {
-  // Implementation
-}
-
-// Use const/let, not var
-const config = { /* ... */ };
-let currentState = null;
-```
-
-### Code Style
-
-- **Indentation**: 2 spaces (no tabs)
-- **Line length**: Max 100 characters
-- **Quotes**: Single quotes for strings
-- **Semicolons**: Use them
-- **Comments**: Explain "why", not "what"
-- **Naming**: camelCase for variables, PascalCase for classes
 
 ## Pull Request Process
 
 ### Before Submitting
 
-1. **Test thoroughly** in multiple browsers
-2. **Check for console errors**
-3. **Verify no breaking changes**
-4. **Update documentation** if needed
-5. **Follow code style** guidelines
-6. **Keep commits atomic** and well-described
+1. ✅ Ensure your code follows the style guidelines
+2. ✅ Run linting and fix any issues
+3. ✅ Run all tests and ensure they pass
+4. ✅ Update documentation if needed
+5. ✅ Add tests for new functionality
+6. ✅ Rebase on latest main branch
+7. ✅ Write a clear PR description
 
 ### PR Template
 
-```markdown
-## Description
-Brief description of changes
+When you open a PR, please include:
 
-## Type of Change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Enhancement
-- [ ] Documentation
-- [ ] Refactoring
-
-## Testing
-- [ ] Tested in Chrome
-- [ ] Tested in Firefox
-- [ ] Tested on mobile
-- [ ] No console errors
-- [ ] All features work correctly
-
-## Screenshots
-(if applicable)
-
-## Related Issues
-Closes #123
-```
+* **Description**: What does this PR do?
+* **Motivation**: Why is this change needed?
+* **Related Issues**: Link to related issues (use "Fixes #123" or "Closes #123")
+* **Screenshots**: If UI changes, include before/after screenshots
+* **Testing**: Describe how you tested the changes
+* **Checklist**: Complete the PR checklist
 
 ### Review Process
 
-1. Maintainers will review your PR
+1. A maintainer will review your PR
 2. Address any requested changes
-3. Once approved, PR will be merged
-4. Your contribution will be credited
+3. Once approved, a maintainer will merge your PR
+4. Your contribution will be included in the next release
 
-## Areas for Contribution
+### After Your PR is Merged
 
-### High Priority
+* Delete your branch (both locally and on GitHub)
+* Pull the latest changes from main
+* Celebrate! 🎉 You've contributed to open source!
 
-- [ ] Full SwiftLaTeX integration for true LaTeX compilation
-- [ ] Better error handling and user feedback
-- [ ] Support for custom LaTeX packages
-- [ ] Improved PDF generation
-- [ ] Multi-file project support
+## Issue Guidelines
 
-### Medium Priority
+### Reporting Bugs
 
-- [ ] Template library
-- [ ] Syntax highlighting improvements
-- [ ] Keyboard shortcuts expansion
-- [ ] Settings panel
-- [ ] Theme customization
+Use the bug report template and include:
 
-### Low Priority / Nice to Have
+* Clear, descriptive title
+* Steps to reproduce
+* Expected behavior
+* Actual behavior
+* Screenshots or error messages
+* Environment details (OS, browser, version)
 
-- [ ] Cloud storage integration
-- [ ] Collaborative editing
-- [ ] Export to other formats
-- [ ] Spell checking
-- [ ] Diff/version comparison
+### Suggesting Features
 
-### Documentation
+Use the feature request template and include:
 
-- [ ] Video tutorials
-- [ ] More LaTeX examples
-- [ ] API documentation
-- [ ] Architecture documentation
+* Clear description of the feature
+* Use case and motivation
+* Possible implementation approach
+* Alternative solutions considered
 
-### Design
+### Issue Labels
 
-- [ ] Additional themes
-- [ ] Icon improvements
-- [ ] Animation enhancements
-- [ ] Accessibility improvements
+We use labels to organize issues:
 
-## Bug Reports
+* `bug` - Something isn't working
+* `feature` - New feature request
+* `documentation` - Documentation improvements
+* `good first issue` - Good for newcomers
+* `help wanted` - Extra attention needed
+* `priority:high` - High priority
+* `priority:low` - Low priority
+* `wontfix` - This will not be worked on
 
-### Before Reporting
+## Community
 
-1. Check existing issues
-2. Try latest version
-3. Test in different browsers
-4. Gather debug information
+### Getting Help
 
-### Bug Report Template
+* Read the [SUPPORT.md](SUPPORT.md) guide
+* Search existing issues and discussions
+* Ask questions in GitHub Discussions (coming soon)
+* Check the documentation in [AGENTS.md](AGENTS.md)
 
-```markdown
-**Describe the bug**
-Clear description of the bug
+### Communication
 
-**To Reproduce**
-1. Go to '...'
-2. Click on '...'
-3. See error
+* Be respectful and constructive
+* Use clear and concise language
+* Stay on topic
+* Follow our Code of Conduct
 
-**Expected behavior**
-What should happen
+### Recognition
 
-**Screenshots**
-If applicable
+Contributors are recognized in:
 
-**Environment**
-- Browser: [e.g., Chrome 120]
-- OS: [e.g., Windows 11]
-- Version: [e.g., 1.0.0]
-
-**Additional context**
-Any other relevant information
-```
-
-## Feature Requests
-
-We welcome feature requests! Please:
-
-1. Check if already requested
-2. Describe the use case
-3. Explain expected behavior
-4. Consider if it fits project scope
+* Release notes
+* GitHub contributors page
+* Project documentation (if significant contributions)
 
 ## Questions?
 
-- **GitHub Issues**: For bug reports and features
-- **GitHub Discussions**: For questions and ideas
-- **Documentation**: Check README.md and GUIDE.md first
+If you have questions about contributing, feel free to:
 
-## License
+* Open an issue with the `question` label
+* Reach out to the maintainers
+* Check our [SUPPORT.md](SUPPORT.md) guide
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
-
----
-
-**Thank you for contributing to LaTeX Editor!** 🎉
+Thank you for contributing to latex-editor! 🚀
