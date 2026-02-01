@@ -400,6 +400,111 @@ both the theoretical foundations and practical implementations.
 4. **Combine** examples to create your own documents
 5. **Download** your work as .tex or PDF
 
+## Multi-File Project Example
+
+For complex documents, you can organize your LaTeX code into multiple files. Create a ZIP file with this structure:
+
+### Main File (main.tex)
+```latex
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+
+\title{My Resume}
+\author{Jane Doe}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\input{sections/summary.tex}
+
+\input{sections/experience.tex}
+
+\input{sections/education.tex}
+
+\section{Conclusion}
+Thank you for considering my application!
+
+\end{document}
+```
+
+### Summary File (sections/summary.tex)
+```latex
+\section{Professional Summary}
+
+Experienced software engineer with 5+ years in full-stack development.
+
+\textbf{Core Competencies:}
+\begin{itemize}
+    \item JavaScript/TypeScript, React, Node.js
+    \item Python, Django, Flask
+    \item AWS, Docker, Kubernetes
+    \item Agile/Scrum methodologies
+\end{itemize}
+```
+
+### Experience File (sections/experience.tex)
+```latex
+\section{Work Experience}
+
+\subsection{Senior Software Engineer}
+\textbf{Tech Company Inc.} \hfill \textit{2020 - Present}
+
+\begin{itemize}
+    \item Led development of microservices architecture
+    \item Improved system performance by 40\%
+    \item Mentored team of 5 junior developers
+\end{itemize}
+
+\subsection{Software Engineer}
+\textbf{Startup XYZ} \hfill \textit{2018 - 2020}
+
+\begin{itemize}
+    \item Built RESTful APIs with Django
+    \item Implemented CI/CD pipelines
+    \item Collaborated with cross-functional teams
+\end{itemize}
+```
+
+### Education File (sections/education.tex)
+```latex
+\section{Education}
+
+\subsection{Bachelor of Science in Computer Science}
+\textbf{University of Technology} \hfill \textit{2014 - 2018}
+
+\begin{itemize}
+    \item GPA: 3.8/4.0
+    \item Dean's List: 6 semesters
+    \item Relevant coursework: Algorithms, Database Systems, Web Development
+\end{itemize}
+```
+
+### How to Use This Example
+
+1. Create the folder structure:
+   ```
+   my-resume/
+   ├── main.tex
+   └── sections/
+       ├── summary.tex
+       ├── experience.tex
+       └── education.tex
+   ```
+
+2. Create a ZIP file with all files and folders
+3. Click the **ZIP** button in the editor toolbar
+4. Select your ZIP file
+5. The editor will:
+   - Show a file tree on the left
+   - Open main.tex automatically
+   - Compile the entire project
+   - Resolve all \input{} commands
+6. Click files in the tree to edit them
+7. Download as ZIP to export your changes
+
 ## Common LaTeX Resources
 
 - Greek letters: `\alpha`, `\beta`, `\gamma`, `\delta`, etc.

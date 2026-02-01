@@ -12,6 +12,9 @@ A professional, open-source LaTeX editor with live PDF preview - like Overleaf, 
 - **Live PDF Preview**: Real-time rendering as you type
 - **Split-Pane Interface**: Editor on left, preview on right
 - **No Compilation Limits**: Unlimited, client-side LaTeX compilation
+- **Multi-File Projects**: Upload ZIP files with complex folder structures
+- **File Tree Navigation**: Browse and edit multiple files in your project
+- **Automatic \input Resolution**: Seamlessly handles \input and \include commands
 - **Syntax Highlighting**: Professional code editor with LaTeX syntax support
 - **Auto-Save**: Automatic saving to local storage
 - **Auto-Compile**: Compiles automatically after 1 second of inactivity
@@ -19,7 +22,16 @@ A professional, open-source LaTeX editor with live PDF preview - like Overleaf, 
 ### 📥 Export Options
 - **Download PDF**: Save your document as PDF
 - **Download .tex**: Export LaTeX source code
+- **Download ZIP**: Export entire multi-file project as ZIP
 - **Print to PDF**: Use browser's print functionality for perfect PDFs
+
+### 📦 Multi-File Project Support
+- **ZIP Upload**: Upload complex LaTeX projects with subfolders
+- **Folder Structure**: Supports nested directories (e.g., cv/experience.tex, images/logo.png)
+- **Main File Detection**: Automatically identifies the main .tex file
+- **File Switching**: Navigate between files using the interactive file tree
+- **Dependency Resolution**: Automatically resolves \input{} and \include{} commands
+- **Project Export**: Download your entire project as a ZIP file
 
 ### 🎨 User Experience
 - **Resizable Panels**: Drag the divider to adjust editor/preview sizes
@@ -79,6 +91,49 @@ This is a completely client-side application - no server or backend needed! All 
 2. **Compile**: Wait for auto-compile, or press `Ctrl+Enter`
 3. **Preview**: See your document rendered in real-time
 4. **Download**: Save as PDF or .tex file
+
+### Working with Multi-File Projects
+
+#### Uploading a ZIP Project
+
+1. **Prepare your ZIP file** with your LaTeX project structure:
+   ```
+   my-project.zip
+   ├── main.tex
+   ├── cv/
+   │   ├── summary.tex
+   │   ├── experience.tex
+   │   └── education.tex
+   ├── images/
+   │   └── logo.png
+   └── bibliography.bib
+   ```
+
+2. **Click the ZIP button** in the toolbar
+3. **Select your ZIP file** - the editor will:
+   - Extract all files and folders
+   - Automatically detect the main .tex file
+   - Build an interactive file tree
+   - Compile the complete project
+
+4. **Navigate files** using the file tree sidebar
+5. **Edit any file** by clicking on it in the tree
+6. **Preview updates** as you edit any file
+7. **Download** your modified project as a ZIP
+
+#### Main File Detection
+
+The editor automatically identifies your main .tex file by looking for:
+- Files named `main.tex`, `document.tex`, `thesis.tex`, `paper.tex`, or `article.tex`
+- Root-level .tex files (if no common names found)
+- The first .tex file encountered (as fallback)
+
+#### File Dependencies
+
+The editor automatically resolves:
+- `\input{filename}` - includes content from other .tex files
+- `\include{filename}` - includes content with page breaks
+- Relative paths like `cv/summary.tex` or `../shared/header.tex`
 
 ### Keyboard Shortcuts
 
