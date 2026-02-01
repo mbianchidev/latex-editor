@@ -1145,22 +1145,18 @@ function resolveIncludes(content, currentPath, visitedFiles = new Set()) {
   const includeRegex = /\\(input|include|includegraphics)(?:\[[^\]]*\])?\{([^}]+)\}/g;
   
   let resolved = content;
-  const matches = [];
+  const replacements = new Map(); // Map from original pattern to resolved content
   let match;
   
-  // Collect all matches first
+  // Collect all unique matches and their replacements
   while ((match = includeRegex.exec(content)) !== null) {
-    matches.push({
-      fullMatch: match[0],
-      command: match[1],
-      filename: match[2],
-      index: match.index
-    });
-  }
-  
-  // Process matches in reverse order to preserve indices
-  for (let i = matches.length - 1; i >= 0; i--) {
-    const { fullMatch, command, filename } = matches[i];
+    const fullMatch = match[0];
+    const command = match[1];
+    const filename = match[2];
+    
+    // Skip if we've already processed this exact include pattern
+    if (replacements.has(fullMatch)) continue;
+    
     let resolvedPath = filename;
     
     // Add .tex extension if missing for input/include
@@ -1179,10 +1175,14 @@ function resolveIncludes(content, currentPath, visitedFiles = new Set()) {
     if (state.projectFiles[resolvedPath]) {
       if (command === 'input' || command === 'include') {
         const includedContent = resolveIncludes(state.projectFiles[resolvedPath], resolvedPath, new Set(visitedFiles));
-        // Replace all occurrences
-        resolved = resolved.replaceAll(fullMatch, includedContent);
+        replacements.set(fullMatch, includedContent);
       }
     }
+  }
+  
+  // Apply all replacements
+  for (const [pattern, replacement] of replacements) {
+    resolved = resolved.replaceAll(pattern, replacement);
   }
   
   return resolved;
