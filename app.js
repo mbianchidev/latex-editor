@@ -893,10 +893,11 @@ async function handleZipUpload(event) {
       
       // Try to find main .tex file
       if (path.endsWith('.tex')) {
+        const filename = path.split('/').pop();
         // Prioritize files with common main document names
         if (!mainTexFile || 
-            path.match(/\/(main|document|thesis|paper|article)\.tex$/i) ||
-            path === path.split('/').pop()) { // Root level .tex file
+            filename.match(/^(main|document|thesis|paper|article)\.tex$/i) ||
+            path === filename) { // Root level .tex file
           mainTexFile = path;
         }
       }
@@ -1128,7 +1129,15 @@ async function downloadProjectZip() {
 /**
  * Resolve file includes in LaTeX content
  */
-function resolveIncludes(content, currentPath) {
+function resolveIncludes(content, currentPath, visitedFiles = new Set()) {
+  // Prevent circular dependencies
+  if (visitedFiles.has(currentPath)) {
+    console.warn(`Circular dependency detected: ${currentPath}`);
+    return content;
+  }
+  
+  visitedFiles.add(currentPath);
+  
   // Get directory of current file
   const dir = currentPath.split('/').slice(0, -1).join('/');
   
@@ -1136,10 +1145,22 @@ function resolveIncludes(content, currentPath) {
   const includeRegex = /\\(input|include|includegraphics)(?:\[[^\]]*\])?\{([^}]+)\}/g;
   
   let resolved = content;
+  const matches = [];
   let match;
   
+  // Collect all matches first
   while ((match = includeRegex.exec(content)) !== null) {
-    const [fullMatch, command, filename] = match;
+    matches.push({
+      fullMatch: match[0],
+      command: match[1],
+      filename: match[2],
+      index: match.index
+    });
+  }
+  
+  // Process matches in reverse order to preserve indices
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const { fullMatch, command, filename } = matches[i];
     let resolvedPath = filename;
     
     // Add .tex extension if missing for input/include
@@ -1157,8 +1178,9 @@ function resolveIncludes(content, currentPath) {
     // If file exists in project, include its content for input/include
     if (state.projectFiles[resolvedPath]) {
       if (command === 'input' || command === 'include') {
-        const includedContent = resolveIncludes(state.projectFiles[resolvedPath], resolvedPath);
-        resolved = resolved.replace(fullMatch, includedContent);
+        const includedContent = resolveIncludes(state.projectFiles[resolvedPath], resolvedPath, new Set(visitedFiles));
+        // Replace all occurrences
+        resolved = resolved.replaceAll(fullMatch, includedContent);
       }
     }
   }
