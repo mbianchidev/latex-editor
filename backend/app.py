@@ -43,7 +43,7 @@ def compile_latex():
     Compile LaTeX endpoint (placeholder for future server-side compilation)
     Currently, compilation is handled client-side
     """
-    data = request.get_json()
+    data = request.get_json(silent=True)
     
     if not data or "latex" not in data:
         return jsonify({"error": "Missing 'latex' field in request body"}), 400
