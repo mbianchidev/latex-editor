@@ -120,7 +120,12 @@ const state = {
   isCompiling: false,
   engine: null,
   lastCompileTime: 0,
-  compileTimeout: null
+  compileTimeout: null,
+  // Multi-file project support
+  projectFiles: {},  // { 'path/to/file.tex': 'content' }
+  currentFile: null, // Currently open file path
+  mainFile: null,    // Main .tex file for compilation
+  projectMode: false // Whether we're in multi-file project mode
 };
 
 // ============================================
@@ -135,6 +140,9 @@ const elements = {
   newDocBtn: document.getElementById('newDoc'),
   downloadPdfBtn: document.getElementById('downloadPdf'),
   downloadTexBtn: document.getElementById('downloadTex'),
+  uploadZipBtn: document.getElementById('uploadZip'),
+  zipFileInput: document.getElementById('zipFileInput'),
+  downloadZipBtn: document.getElementById('downloadZip'),
   zoomInBtn: document.getElementById('zoomIn'),
   zoomOutBtn: document.getElementById('zoomOut'),
   zoomLevel: document.getElementById('zoomLevel'),
@@ -150,7 +158,12 @@ const elements = {
   closeSuccess: document.getElementById('closeSuccess'),
   divider: document.getElementById('divider'),
   editorPanel: document.getElementById('editorPanel'),
-  previewPanel: document.getElementById('previewPanel')
+  previewPanel: document.getElementById('previewPanel'),
+  fileTree: document.getElementById('fileTree'),
+  fileTreeContent: document.getElementById('fileTreeContent'),
+  toggleFileTreeBtn: document.getElementById('toggleFileTree'),
+  closeFileTreeBtn: document.getElementById('closeFileTree'),
+  currentFileName: document.getElementById('currentFileName')
 };
 
 // ============================================
@@ -224,13 +237,22 @@ function initializeEventListeners() {
   // New document
   elements.newDocBtn.addEventListener('click', newDocument);
   
+  // ZIP upload
+  elements.uploadZipBtn.addEventListener('click', () => elements.zipFileInput.click());
+  elements.zipFileInput.addEventListener('change', handleZipUpload);
+  
   // Download buttons
   elements.downloadPdfBtn.addEventListener('click', downloadPDF);
   elements.downloadTexBtn.addEventListener('click', downloadTeX);
+  elements.downloadZipBtn.addEventListener('click', downloadProjectZip);
   
   // Zoom controls
   elements.zoomInBtn.addEventListener('click', () => setZoom(state.zoom + 0.1));
   elements.zoomOutBtn.addEventListener('click', () => setZoom(state.zoom - 0.1));
+  
+  // File tree controls
+  elements.toggleFileTreeBtn.addEventListener('click', toggleFileTree);
+  elements.closeFileTreeBtn.addEventListener('click', () => toggleFileTree(false));
   
   // Toast close buttons
   elements.closeError.addEventListener('click', () => hideToast('error'));
@@ -246,6 +268,11 @@ function initializeEventListeners() {
 
 function handleEditorChange(e) {
   state.currentLatex = e.target.value;
+  
+  // Update project file if in project mode
+  if (state.projectMode && state.currentFile) {
+    state.projectFiles[state.currentFile] = state.currentLatex;
+  }
   
   // Auto-compile after 1 second of inactivity
   clearTimeout(state.compileTimeout);
@@ -283,9 +310,23 @@ async function compile() {
   const startTime = Date.now();
   
   try {
+    // Save current file content if in project mode
+    if (state.projectMode && state.currentFile) {
+      state.projectFiles[state.currentFile] = state.currentLatex;
+    }
+    
+    // Get the LaTeX content to compile
+    let latexContent = state.currentLatex;
+    
+    // If in project mode, resolve includes from main file
+    if (state.projectMode && state.mainFile) {
+      latexContent = state.projectFiles[state.mainFile];
+      latexContent = resolveIncludes(latexContent, state.mainFile);
+    }
+    
     // Use a simple LaTeX to HTML converter for demo purposes
     // In production, you would use SwiftLaTeX or similar
-    const pdfBlob = await compileLatexToBlob(state.currentLatex);
+    const pdfBlob = await compileLatexToBlob(latexContent);
     
     state.pdfData = pdfBlob;
     state.lastCompileTime = Date.now() - startTime;
@@ -816,6 +857,311 @@ function showSuccessToast(message) {
   elements.successMessage.textContent = message;
   elements.successToast.classList.add('active');
   setTimeout(() => hideToast('success'), 3000);
+}
+
+// ============================================
+// ZIP FILE HANDLING
+// ============================================
+
+/**
+ * Handle ZIP file upload
+ */
+async function handleZipUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  if (!file.name.endsWith('.zip')) {
+    showErrorToast('Please upload a ZIP file');
+    return;
+  }
+  
+  try {
+    showLoading('Extracting ZIP file...');
+    showStatus('Loading project...', 'info');
+    
+    const zip = await JSZip.loadAsync(file);
+    const files = {};
+    let mainTexFile = null;
+    
+    // Extract all files
+    for (const [path, zipEntry] of Object.entries(zip.files)) {
+      if (zipEntry.dir) continue;
+      
+      // Read file content
+      const content = await zipEntry.async('string');
+      files[path] = content;
+      
+      // Try to find main .tex file
+      if (path.endsWith('.tex')) {
+        // Prioritize files with common main document names
+        if (!mainTexFile || 
+            path.match(/\/(main|document|thesis|paper|article)\.tex$/i) ||
+            path === path.split('/').pop()) { // Root level .tex file
+          mainTexFile = path;
+        }
+      }
+    }
+    
+    if (Object.keys(files).length === 0) {
+      showErrorToast('ZIP file is empty');
+      return;
+    }
+    
+    // If no .tex file found, check if there's at least one
+    if (!mainTexFile) {
+      const texFiles = Object.keys(files).filter(f => f.endsWith('.tex'));
+      if (texFiles.length > 0) {
+        mainTexFile = texFiles[0];
+      } else {
+        showErrorToast('No .tex files found in ZIP');
+        return;
+      }
+    }
+    
+    // Update state
+    state.projectFiles = files;
+    state.mainFile = mainTexFile;
+    state.currentFile = mainTexFile;
+    state.projectMode = true;
+    
+    // Update UI
+    elements.currentFileName.textContent = mainTexFile.split('/').pop();
+    elements.editor.value = files[mainTexFile];
+    state.currentLatex = files[mainTexFile];
+    
+    // Build and show file tree
+    buildFileTree(files);
+    elements.fileTree.style.display = 'flex';
+    elements.toggleFileTreeBtn.style.display = 'inline-block';
+    elements.downloadZipBtn.style.display = 'inline-block';
+    elements.editorPanel.classList.add('has-file-tree');
+    
+    showSuccessToast(`Loaded ${Object.keys(files).length} files from project`);
+    showStatus('Project loaded', 'success');
+    
+    // Compile the project
+    setTimeout(() => compile(), 500);
+    
+  } catch (error) {
+    console.error('ZIP extraction error:', error);
+    showErrorToast('Failed to extract ZIP file: ' + error.message);
+  } finally {
+    hideLoading();
+    // Reset file input
+    event.target.value = '';
+  }
+}
+
+/**
+ * Build file tree UI from project files
+ */
+function buildFileTree(files) {
+  const tree = {};
+  
+  // Build tree structure
+  for (const path of Object.keys(files)) {
+    const parts = path.split('/');
+    let current = tree;
+    
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isFile = i === parts.length - 1;
+      
+      if (!current[part]) {
+        current[part] = isFile ? { __file__: path } : {};
+      }
+      
+      if (!isFile) {
+        current = current[part];
+      }
+    }
+  }
+  
+  // Render tree
+  elements.fileTreeContent.innerHTML = '';
+  renderTreeNode(tree, elements.fileTreeContent, '');
+}
+
+/**
+ * Render a tree node recursively
+ */
+function renderTreeNode(node, container, path) {
+  for (const [name, value] of Object.entries(node)) {
+    const isFile = value.__file__;
+    const fullPath = isFile ? value.__file__ : (path ? `${path}/${name}` : name);
+    
+    const item = document.createElement('div');
+    item.className = 'file-tree-item' + 
+                     (isFile ? '' : ' folder expanded') +
+                     (isFile && name.endsWith('.tex') ? ' tex' : '') +
+                     (isFile && name.match(/\.(png|jpg|jpeg|gif|svg)$/i) ? ' image' : '') +
+                     (isFile && name.endsWith('.pdf') ? ' pdf' : '');
+    
+    if (isFile && fullPath === state.currentFile) {
+      item.classList.add('active');
+    }
+    
+    const icon = document.createElement('span');
+    icon.className = 'file-tree-icon';
+    item.appendChild(icon);
+    
+    const label = document.createElement('span');
+    label.textContent = name;
+    item.appendChild(label);
+    
+    container.appendChild(item);
+    
+    if (isFile) {
+      // Click handler for files
+      item.addEventListener('click', () => openFile(fullPath));
+    } else {
+      // Folder - create children container
+      const children = document.createElement('div');
+      children.className = 'file-tree-children';
+      container.appendChild(children);
+      
+      // Click handler for folders
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        item.classList.toggle('expanded');
+        item.classList.toggle('collapsed');
+        children.classList.toggle('collapsed');
+      });
+      
+      // Recursively render children
+      renderTreeNode(value, children, fullPath);
+    }
+  }
+}
+
+/**
+ * Open a file from the project
+ */
+function openFile(path) {
+  if (!state.projectFiles[path]) return;
+  
+  // Save current file content
+  if (state.currentFile && state.projectFiles[state.currentFile] !== undefined) {
+    state.projectFiles[state.currentFile] = state.currentLatex;
+  }
+  
+  // Load new file
+  state.currentFile = path;
+  state.currentLatex = state.projectFiles[path];
+  elements.editor.value = state.currentLatex;
+  elements.currentFileName.textContent = path.split('/').pop();
+  
+  // Update file tree selection
+  document.querySelectorAll('.file-tree-item').forEach(item => {
+    item.classList.remove('active');
+  });
+  event.target.closest('.file-tree-item').classList.add('active');
+  
+  // Compile if this is the main file
+  if (path === state.mainFile) {
+    setTimeout(() => compile(), 500);
+  }
+}
+
+/**
+ * Toggle file tree visibility
+ */
+function toggleFileTree(show) {
+  if (show === false || elements.fileTree.style.display === 'flex') {
+    elements.fileTree.style.display = 'none';
+    elements.editorPanel.classList.remove('has-file-tree');
+  } else {
+    elements.fileTree.style.display = 'flex';
+    elements.editorPanel.classList.add('has-file-tree');
+  }
+}
+
+/**
+ * Download project as ZIP
+ */
+async function downloadProjectZip() {
+  if (!state.projectMode || Object.keys(state.projectFiles).length === 0) {
+    showErrorToast('No project to download');
+    return;
+  }
+  
+  try {
+    showLoading('Creating ZIP file...');
+    
+    // Save current file
+    if (state.currentFile) {
+      state.projectFiles[state.currentFile] = state.currentLatex;
+    }
+    
+    const zip = new JSZip();
+    
+    // Add all files to ZIP
+    for (const [path, content] of Object.entries(state.projectFiles)) {
+      zip.file(path, content);
+    }
+    
+    // Generate ZIP
+    const blob = await zip.generateAsync({ type: 'blob' });
+    
+    // Download
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'latex-project.zip';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    showSuccessToast('Project downloaded as ZIP');
+    
+  } catch (error) {
+    console.error('ZIP creation error:', error);
+    showErrorToast('Failed to create ZIP file');
+  } finally {
+    hideLoading();
+  }
+}
+
+/**
+ * Resolve file includes in LaTeX content
+ */
+function resolveIncludes(content, currentPath) {
+  // Get directory of current file
+  const dir = currentPath.split('/').slice(0, -1).join('/');
+  
+  // Match \input{file}, \include{file}, \includegraphics{file}
+  const includeRegex = /\\(input|include|includegraphics)(?:\[[^\]]*\])?\{([^}]+)\}/g;
+  
+  let resolved = content;
+  let match;
+  
+  while ((match = includeRegex.exec(content)) !== null) {
+    const [fullMatch, command, filename] = match;
+    let resolvedPath = filename;
+    
+    // Add .tex extension if missing for input/include
+    if ((command === 'input' || command === 'include') && !filename.endsWith('.tex')) {
+      resolvedPath = filename + '.tex';
+    }
+    
+    // Resolve relative path
+    if (!resolvedPath.startsWith('/')) {
+      resolvedPath = dir ? `${dir}/${resolvedPath}` : resolvedPath;
+    } else {
+      resolvedPath = resolvedPath.substring(1); // Remove leading /
+    }
+    
+    // If file exists in project, include its content for input/include
+    if (state.projectFiles[resolvedPath]) {
+      if (command === 'input' || command === 'include') {
+        const includedContent = resolveIncludes(state.projectFiles[resolvedPath], resolvedPath);
+        resolved = resolved.replace(fullMatch, includedContent);
+      }
+    }
+  }
+  
+  return resolved;
 }
 
 function hideToast(type) {

@@ -33,6 +33,11 @@
       };
     </script>
     <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    
+    <!-- JSZip for ZIP file handling -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" 
+            integrity="sha512-XMVd28F1oH/O71fzwBnV7HucLxVwtxf26XV8P4wPk26EDxuGZ91N8bsOttmnomcCD3CS5ZMRL50H0GgOHvegtg==" 
+            crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 <body>
     <!-- Header -->
@@ -52,6 +57,15 @@
                     </svg>
                     New
                 </button>
+                <button class="btn btn-secondary" id="uploadZip" title="Upload ZIP Project">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    ZIP
+                </button>
+                <input type="file" id="zipFileInput" accept=".zip" style="display: none;" />
                 <button class="btn btn-secondary" id="downloadTex" title="Download LaTeX Source">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -59,6 +73,14 @@
                         <line x1="12" y1="15" x2="12" y2="3"/>
                     </svg>
                     .tex
+                </button>
+                <button class="btn btn-secondary" id="downloadZip" title="Download Project as ZIP" style="display: none;">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    ZIP
                 </button>
                 <button class="btn btn-primary" id="downloadPdf" title="Download PDF">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -76,9 +98,30 @@
     <main class="main-content">
         <!-- Editor Panel -->
         <div class="editor-panel" id="editorPanel">
+            <!-- File Tree (hidden by default) -->
+            <div class="file-tree" id="fileTree" style="display: none;">
+                <div class="file-tree-header">
+                    <h3 class="file-tree-title">Project Files</h3>
+                    <button class="icon-btn" id="closeFileTree" title="Close file tree">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"/>
+                            <line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="file-tree-content" id="fileTreeContent">
+                    <!-- File tree will be populated here -->
+                </div>
+            </div>
+            
             <div class="panel-header">
-                <h2 class="panel-title">LaTeX Source</h2>
+                <h2 class="panel-title" id="currentFileName">LaTeX Source</h2>
                 <div class="panel-actions">
+                    <button class="icon-btn" id="toggleFileTree" title="Toggle file tree" style="display: none;">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                        </svg>
+                    </button>
                     <button class="icon-btn" id="compileBtn" title="Compile (Ctrl+Enter)">
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <polygon points="5 3 19 12 5 21 5 3"/>

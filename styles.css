@@ -763,3 +763,128 @@ button {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-stone);
 }
+
+/* ============================================
+   FILE TREE STYLES
+   ============================================ */
+.file-tree {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 250px;
+  height: 100%;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border-primary);
+  box-shadow: var(--shadow-md);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+}
+
+.file-tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-secondary);
+  background: var(--bg-secondary);
+}
+
+.file-tree-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.file-tree-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+.file-tree-item {
+  display: flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  transition: background-color var(--transition-fast);
+  margin: var(--space-1) 0;
+}
+
+.file-tree-item:hover {
+  background: var(--bg-secondary);
+}
+
+.file-tree-item.active {
+  background: var(--color-accent-light);
+  color: var(--color-accent-deep);
+  font-weight: 500;
+}
+
+.file-tree-item.folder {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.file-tree-item.folder.collapsed > .file-tree-icon::before {
+  content: '▶';
+}
+
+.file-tree-item.folder.expanded > .file-tree-icon::before {
+  content: '▼';
+}
+
+.file-tree-icon {
+  margin-right: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-accent);
+  min-width: 16px;
+  text-align: center;
+}
+
+.file-tree-icon::before {
+  content: '📄';
+}
+
+.file-tree-item.folder > .file-tree-icon::before {
+  content: '▶';
+  color: var(--text-tertiary);
+}
+
+.file-tree-item.tex > .file-tree-icon::before {
+  content: '📝';
+}
+
+.file-tree-item.image > .file-tree-icon::before {
+  content: '🖼️';
+}
+
+.file-tree-item.pdf > .file-tree-icon::before {
+  content: '📕';
+}
+
+.file-tree-children {
+  margin-left: var(--space-4);
+  border-left: 1px solid var(--border-secondary);
+  padding-left: var(--space-2);
+}
+
+.file-tree-children.collapsed {
+  display: none;
+}
+
+/* Adjust editor container when file tree is shown */
+.editor-panel.has-file-tree .editor-container {
+  margin-left: 0;
+}
+
+.editor-panel.has-file-tree .panel-header {
+  padding-left: 260px;
+  transition: padding-left var(--transition-base);
+}
