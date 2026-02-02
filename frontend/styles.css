@@ -529,7 +529,7 @@ button {
    LOADING OVERLAY
    ============================================ */
 .loading-overlay {
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   width: 100%;
@@ -539,11 +539,16 @@ button {
   display: none;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 100;
 }
 
 .loading-overlay.active {
   display: flex;
+}
+
+/* Ensure preview-container is positioned for absolute child */
+.preview-container {
+  position: relative;
 }
 
 .loading-spinner {
@@ -791,6 +796,12 @@ button {
   min-height: 48px;
 }
 
+.file-tree-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 .file-tree-title {
   font-size: var(--text-sm);
   font-weight: 600;
@@ -920,4 +931,193 @@ button {
 
 .editor-panel .status-bar {
   flex-shrink: 0;
+}
+
+/* ============================================
+   CONTEXT MENU FOR FILE MANAGEMENT
+   ============================================ */
+.file-context-menu {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  min-width: 160px;
+  padding: var(--space-1) 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.context-menu-item {
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background-color var(--transition-fast);
+}
+
+.context-menu-item:hover {
+  background: var(--color-accent-light);
+}
+
+.context-menu-item.danger {
+  color: var(--color-error);
+}
+
+.context-menu-item.danger:hover {
+  background: #fce4e4;
+}
+
+.context-menu-item.disabled {
+  color: var(--text-tertiary);
+  cursor: default;
+  font-style: italic;
+  background: var(--bg-secondary);
+}
+
+.context-menu-item.disabled:hover {
+  background: var(--bg-secondary);
+}
+
+/* File tree label styling */
+.file-tree-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Main file indicator */
+.file-tree-item.main-file::after {
+  content: '⭐';
+  margin-left: var(--space-2);
+  font-size: 10px;
+}
+
+/* Junk file styling (macOS metadata, etc.) */
+.file-tree-item.junk {
+  opacity: 0.5;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 5px,
+    rgba(181, 108, 108, 0.05) 5px,
+    rgba(181, 108, 108, 0.05) 10px
+  );
+  border: 1px dashed var(--color-error);
+  color: var(--color-error);
+}
+
+.file-tree-item.junk .file-tree-icon::before {
+  content: '⚠️' !important;
+  font-size: 12px;
+}
+
+.file-tree-item.junk:hover {
+  opacity: 0.8;
+  background: rgba(181, 108, 108, 0.1);
+}
+
+.file-tree-item.junk .file-tree-label {
+  text-decoration: line-through;
+}
+
+/* ============================================
+   AUTO-COMPILE TOGGLE
+   ============================================ */
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.toggle-label:hover {
+  background: var(--color-parchment);
+  color: var(--text-secondary);
+}
+
+.toggle-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.toggle-text {
+  font-family: var(--font-sans);
+  font-weight: 500;
+}
+
+/* ============================================
+   FILE TREE ACTION BUTTONS
+   ============================================ */
+.file-tree-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+  padding-left: var(--space-2);
+}
+
+.file-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 3px 6px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: all var(--transition-fast);
+  border-radius: var(--radius-sm);
+}
+
+.file-action-btn:hover {
+  opacity: 1;
+  border-color: var(--border-primary);
+}
+
+.file-action-btn.rename-btn {
+  color: var(--color-accent-dark);
+}
+
+.file-action-btn.rename-btn:hover {
+  background: var(--color-accent-light);
+}
+
+.file-action-btn.delete-btn {
+  color: var(--color-error);
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.file-action-btn.delete-btn:hover {
+  background: #fce4e4;
+}
+
+.file-tree-item:hover .file-tree-actions {
+  opacity: 1;
+}
+
+.file-tree-item:hover .file-action-btn {
+  opacity: 1;
+}
+
+/* Small icon button variant for header */
+.icon-btn.small {
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+}
+
+.icon-btn.small .icon {
+  width: 16px;
+  height: 16px;
 }

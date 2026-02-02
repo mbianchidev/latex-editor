@@ -120,7 +120,6 @@ const state = {
   isCompiling: false,
   engine: null,
   lastCompileTime: 0,
-  compileTimeout: null,
   // Multi-file project support
   projectFiles: {},  // { 'path/to/file.tex': 'content' }
   currentFile: null, // Currently open file path
@@ -163,6 +162,7 @@ const elements = {
   fileTreeContent: document.getElementById('fileTreeContent'),
   toggleFileTreeBtn: document.getElementById('toggleFileTree'),
   closeFileTreeBtn: document.getElementById('closeFileTree'),
+  cleanProjectBtn: document.getElementById('cleanProjectBtn'),
   currentFileName: document.getElementById('currentFileName')
 };
 
@@ -189,10 +189,10 @@ async function init() {
   // Load from localStorage if available
   loadFromLocalStorage();
   
-  showStatus('Ready', 'success');
+  showStatus('Compiling...', 'info');
   
-  // Initial compile after a short delay
-  setTimeout(() => compile(), 500);
+  // Compile on first load
+  compile(true);
 }
 
 // ============================================
@@ -253,6 +253,7 @@ function initializeEventListeners() {
   // File tree controls
   elements.toggleFileTreeBtn.addEventListener('click', toggleFileTree);
   elements.closeFileTreeBtn.addEventListener('click', () => toggleFileTree(false));
+  elements.cleanProjectBtn.addEventListener('click', cleanCurrentProject);
   
   // Toast close buttons
   elements.closeError.addEventListener('click', () => hideToast('error'));
@@ -274,12 +275,6 @@ function handleEditorChange(e) {
     state.projectFiles[state.currentFile] = state.currentLatex;
   }
   
-  // Auto-compile after 1 second of inactivity
-  clearTimeout(state.compileTimeout);
-  state.compileTimeout = setTimeout(() => {
-    compile();
-  }, 1000);
-  
   saveToLocalStorage();
 }
 
@@ -297,7 +292,7 @@ function updateCursorPosition() {
 // LATEX COMPILATION
 // ============================================
 
-async function compile() {
+async function compile(isInitial = false) {
   if (state.isCompiling) {
     showStatus('Compilation in progress...', 'info');
     return;
@@ -384,6 +379,34 @@ function convertLatexToHTML(latex) {
   const title = titleMatch ? titleMatch[1] : '';
   const author = authorMatch ? authorMatch[1] : '';
   const date = dateMatch ? dateMatch[1].replace('\\today', new Date().toLocaleDateString()) : '';
+  
+  // Handle includegraphics - convert to embedded images with base64 data
+  content = content.replace(/\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}/g, (match, filename) => {
+    // Try to find the image in project files
+    if (state.projectMode && state.projectFiles) {
+      // Try exact path first, then with common extensions
+      const extensions = ['', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.pdf'];
+      for (const ext of extensions) {
+        const imgPath = filename + ext;
+        const imgData = state.projectFiles[imgPath];
+        if (imgData && typeof imgData === 'object' && imgData.isBinary) {
+          // Determine mime type
+          const actualExt = imgPath.split('.').pop().toLowerCase();
+          const mimeTypes = {
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'gif': 'image/gif',
+            'svg': 'image/svg+xml'
+          };
+          const mimeType = mimeTypes[actualExt] || 'application/octet-stream';
+          return `<img src="data:${mimeType};base64,${imgData.content}" alt="${filename}" style="max-width: 100%; height: auto;">`;
+        }
+      }
+    }
+    // Return placeholder if image not found
+    return `<div style="padding: 1em; background: #f0f0f0; border: 1px dashed #ccc; text-align: center; color: #666;">[Image: ${filename}]</div>`;
+  });
   
   // Basic conversions
   content = content
@@ -586,23 +609,34 @@ async function createPDFFromHTML(htmlContent) {
 // ============================================
 
 async function renderPDF(blob) {
-  // Clear previous content
-  elements.previewContent.innerHTML = '';
-  
-  // Create an iframe to display the HTML
-  const iframe = document.createElement('iframe');
-  iframe.style.width = '100%';
-  iframe.style.minHeight = '11in';
-  iframe.style.border = 'none';
-  iframe.style.background = 'white';
-  iframe.style.boxShadow = '0 20px 25px rgba(42, 39, 36, 0.1), 0 10px 10px rgba(42, 39, 36, 0.04)';
-  iframe.style.borderRadius = '2px';
+  // Revoke previous blob URL to prevent memory leaks
+  const existingIframe = elements.previewContent.querySelector('iframe');
+  if (existingIframe && existingIframe.dataset.blobUrl) {
+    URL.revokeObjectURL(existingIframe.dataset.blobUrl);
+  }
   
   // Convert blob to URL
   const url = URL.createObjectURL(blob);
-  iframe.src = url;
   
-  elements.previewContent.appendChild(iframe);
+  // Reuse existing iframe if available (only reload src, don't recreate)
+  if (existingIframe) {
+    existingIframe.dataset.blobUrl = url;
+    existingIframe.src = url;
+  } else {
+    // Create an iframe to display the HTML
+    const iframe = document.createElement('iframe');
+    iframe.style.width = '100%';
+    iframe.style.minHeight = '11in';
+    iframe.style.border = 'none';
+    iframe.style.background = 'white';
+    iframe.style.boxShadow = '0 20px 25px rgba(42, 39, 36, 0.1), 0 10px 10px rgba(42, 39, 36, 0.04)';
+    iframe.style.borderRadius = '2px';
+    iframe.dataset.blobUrl = url;
+    iframe.src = url;
+    
+    elements.previewContent.innerHTML = '';
+    elements.previewContent.appendChild(iframe);
+  }
   
   // Apply zoom
   applyZoom();
@@ -733,25 +767,11 @@ function newDocument() {
   
   state.currentLatex = DEFAULT_TEMPLATE;
   elements.editor.value = DEFAULT_TEMPLATE;
-  elements.previewContent.innerHTML = `
-    <div class="welcome-message">
-      <svg class="welcome-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-        <polyline points="14 2 14 8 20 8"/>
-        <line x1="16" y1="13" x2="8" y2="13"/>
-        <line x1="16" y1="17" x2="8" y2="17"/>
-        <polyline points="10 9 9 9 8 9"/>
-      </svg>
-      <h3>New Document Created</h3>
-      <p>Start editing or press <kbd>Ctrl+Enter</kbd> to compile.</p>
-    </div>
-  `;
   
   saveToLocalStorage();
-  showSuccessToast('New document created');
   
-  // Compile after a short delay
-  setTimeout(() => compile(), 500);
+  // Compile the new document
+  compile(true);
 }
 
 // ============================================
@@ -863,9 +883,144 @@ function showSuccessToast(message) {
 // ZIP FILE HANDLING
 // ============================================
 
+// Binary file extensions that should be stored as base64
+const BINARY_EXTENSIONS = /\.(png|jpg|jpeg|gif|svg|pdf|ttf|otf|woff|woff2|eot|eps|bmp|tiff?|ico)$/i;
+
+// Patterns for macOS/system junk files
+const MACOS_JUNK_PATTERNS = [
+  '__MACOSX',    // macOS zip metadata folder
+  '__macosx',    // lowercase variant
+  '.DS_Store',   // macOS folder metadata
+  '._.DS_Store', // macOS resource fork for DS_Store
+  '.Spotlight-V100',
+  '.Trashes',
+  '.fseventsd',
+  '.TemporaryItems',
+  '.AppleDouble',
+  '.AppleDesktop',
+  '.VolumeIcon.icns',
+  'Thumbs.db',   // Windows thumbnail cache
+  'desktop.ini', // Windows folder settings
+  '.git',        // Git internals (we don't want these in LaTeX projects)
+];
+
 /**
- * Handle ZIP file upload
+ * Check if a file path is macOS/system junk that should be filtered
+ * @param {string} filePath - The file path to check
+ * @returns {boolean} - True if the file should be skipped
  */
+function isMacOSJunk(filePath) {
+  if (!filePath || typeof filePath !== 'string') return true;
+  
+  const normalizedPath = filePath.trim();
+  if (!normalizedPath) return true;
+  
+  // Check the full path first (case-insensitive)
+  const lowerPath = normalizedPath.toLowerCase();
+  
+  // Check if path contains __macosx anywhere
+  if (lowerPath.includes('__macosx')) {
+    console.log('[FILTER] Blocked __MACOSX path:', filePath);
+    return true;
+  }
+  
+  // Split into path segments
+  const segments = normalizedPath.split('/').filter(s => s.length > 0);
+  
+  for (const segment of segments) {
+    // Check for known junk patterns (case-insensitive)
+    const lowerSegment = segment.toLowerCase();
+    for (const pattern of MACOS_JUNK_PATTERNS) {
+      if (lowerSegment === pattern.toLowerCase()) {
+        console.log('[FILTER] Blocked junk pattern:', filePath, '(matched:', pattern, ')');
+        return true;
+      }
+    }
+    
+    // Check for resource forks (files starting with ._)
+    if (segment.startsWith('._')) {
+      console.log('[FILTER] Blocked resource fork:', filePath);
+      return true;
+    }
+    
+    // Check for hidden files (except allowed ones)
+    if (segment.startsWith('.') && segment !== '.gitignore' && segment !== '.github') {
+      console.log('[FILTER] Blocked hidden file:', filePath);
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// Alias for backward compatibility
+const shouldSkipFile = isMacOSJunk;
+
+/**
+ * Clean project files of any macOS/system junk
+ * @param {Object} files - The project files object
+ * @returns {Object} - Cleaned files object with junk removed
+ */
+function cleanProjectFiles(files) {
+  if (!files || typeof files !== 'object') return {};
+  
+  const cleanedFiles = {};
+  let removedCount = 0;
+  
+  for (const [path, content] of Object.entries(files)) {
+    if (isMacOSJunk(path)) {
+      console.log('[CLEAN] Removing junk file:', path);
+      removedCount++;
+      continue;
+    }
+    cleanedFiles[path] = content;
+  }
+  
+  if (removedCount > 0) {
+    console.log(`[CLEAN] Removed ${removedCount} junk files from project`);
+  }
+  
+  return cleanedFiles;
+}
+
+/**
+ * Clean the current project in-place and rebuild the file tree
+ */
+function cleanCurrentProject() {
+  if (!state.projectMode || !state.projectFiles) {
+    showErrorToast('No project loaded');
+    return;
+  }
+  
+  const beforeCount = Object.keys(state.projectFiles).length;
+  state.projectFiles = cleanProjectFiles(state.projectFiles);
+  const afterCount = Object.keys(state.projectFiles).length;
+  const removedCount = beforeCount - afterCount;
+  
+  if (removedCount > 0) {
+    // Update current file if it was deleted
+    if (state.currentFile && !state.projectFiles[state.currentFile]) {
+      state.currentFile = state.mainFile;
+      if (state.mainFile && state.projectFiles[state.mainFile]) {
+        state.currentLatex = state.projectFiles[state.mainFile];
+        elements.editor.value = state.currentLatex;
+        elements.currentFileName.textContent = state.mainFile.split('/').pop();
+      }
+    }
+    
+    // Update main file if it was deleted
+    if (state.mainFile && !state.projectFiles[state.mainFile]) {
+      const texFiles = Object.keys(state.projectFiles).filter(f => f.endsWith('.tex'));
+      state.mainFile = texFiles[0] || null;
+    }
+    
+    buildFileTree(state.projectFiles);
+    showSuccessToast(`Cleaned ${removedCount} macOS/system files`);
+  } else {
+    showSuccessToast('Project is already clean!');
+  }
+}
+
 async function handleZipUpload(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -880,16 +1035,39 @@ async function handleZipUpload(event) {
     showStatus('Loading project...', 'info');
     
     const zip = await JSZip.loadAsync(file);
-    const files = {};
+    let rawFiles = {};
     let mainTexFile = null;
+    let skippedCount = 0;
+    
+    console.log('[ZIP] Starting extraction...');
+    console.log('[ZIP] Total entries in ZIP:', Object.keys(zip.files).length);
     
     // Extract all files
     for (const [path, zipEntry] of Object.entries(zip.files)) {
-      if (zipEntry.dir) continue;
+      // Skip directories
+      if (zipEntry.dir) {
+        console.log('[ZIP] Skipping directory entry:', path);
+        continue;
+      }
       
-      // Read file content
-      const content = await zipEntry.async('string');
-      files[path] = content;
+      // Filter out macOS junk files BEFORE loading content
+      if (isMacOSJunk(path)) {
+        skippedCount++;
+        continue;
+      }
+      
+      // Determine if file is binary based on extension
+      const isBinary = BINARY_EXTENSIONS.test(path);
+      
+      if (isBinary) {
+        // Read binary files as base64 to preserve their content
+        const base64Content = await zipEntry.async('base64');
+        rawFiles[path] = { isBinary: true, content: base64Content };
+      } else {
+        // Read text files as string
+        const content = await zipEntry.async('string');
+        rawFiles[path] = content;
+      }
       
       // Try to find main .tex file
       if (path.endsWith('.tex')) {
@@ -903,20 +1081,50 @@ async function handleZipUpload(event) {
       }
     }
     
+    console.log('[ZIP] Raw files extracted:', Object.keys(rawFiles).length);
+    console.log('[ZIP] Skipped during extraction:', skippedCount);
+    
+    // Double-clean the files to ensure no junk slipped through
+    const files = cleanProjectFiles(rawFiles);
+    const extraCleaned = Object.keys(rawFiles).length - Object.keys(files).length;
+    if (extraCleaned > 0) {
+      console.log('[ZIP] Extra files cleaned:', extraCleaned);
+      skippedCount += extraCleaned;
+    }
+    
+    console.log('[ZIP] Final clean files:', Object.keys(files).length);
+    console.log('[ZIP] File list:', Object.keys(files));
+    
     if (Object.keys(files).length === 0) {
-      showErrorToast('ZIP file is empty');
+      showErrorToast('ZIP file is empty or contains only system files');
       return;
     }
     
-    // If no .tex file found, check if there's at least one
-    if (!mainTexFile) {
+    // Re-check main file after cleaning (in case it was in a junk path)
+    if (!mainTexFile || !files[mainTexFile]) {
+      mainTexFile = null;
       const texFiles = Object.keys(files).filter(f => f.endsWith('.tex'));
       if (texFiles.length > 0) {
-        mainTexFile = texFiles[0];
-      } else {
-        showErrorToast('No .tex files found in ZIP');
-        return;
+        // Prioritize common main file names
+        for (const tf of texFiles) {
+          const fname = tf.split('/').pop().toLowerCase();
+          if (['main.tex', 'document.tex', 'thesis.tex', 'paper.tex', 'article.tex'].includes(fname)) {
+            mainTexFile = tf;
+            break;
+          }
+        }
+        // If no common name found, use first root-level tex file or first tex file
+        if (!mainTexFile) {
+          const rootTex = texFiles.find(f => !f.includes('/'));
+          mainTexFile = rootTex || texFiles[0];
+        }
       }
+    }
+    
+    // If still no .tex file found, show error
+    if (!mainTexFile) {
+      showErrorToast('No .tex files found in ZIP');
+      return;
     }
     
     // Update state
@@ -936,11 +1144,14 @@ async function handleZipUpload(event) {
     elements.toggleFileTreeBtn.style.display = 'inline-block';
     elements.downloadZipBtn.style.display = 'inline-block';
     
-    showSuccessToast(`Loaded ${Object.keys(files).length} files from project`);
-    showStatus('Project loaded', 'success');
+    if (skippedCount > 0) {
+      console.log(`Filtered out ${skippedCount} macOS metadata files`);
+    }
     
-    // Compile the project
-    setTimeout(() => compile(), 500);
+    showSuccessToast(`Loaded ${Object.keys(files).length} files`);
+    
+    // Compile the loaded project
+    compile(true);
     
   } catch (error) {
     console.error('ZIP extraction error:', error);
@@ -990,16 +1201,30 @@ function renderTreeNode(node, container, path) {
     const isFile = value.__file__;
     const fullPath = isFile ? value.__file__ : (path ? `${path}/${name}` : name);
     
+    // Check if this is a junk file/folder that slipped through
+    const isJunk = isMacOSJunk(fullPath) || isMacOSJunk(name);
+    
     const item = document.createElement('div');
     item.className = 'file-tree-item' + 
                      (isFile ? '' : ' folder expanded') +
                      (isFile && name.endsWith('.tex') ? ' tex' : '') +
                      (isFile && name.match(/\.(png|jpg|jpeg|gif|svg)$/i) ? ' image' : '') +
                      (isFile && name.endsWith('.pdf') ? ' pdf' : '') +
-                     (isFile && name.match(/\.(ttf|otf|woff|woff2)$/i) ? ' font' : '');
+                     (isFile && name.match(/\.(ttf|otf|woff|woff2)$/i) ? ' font' : '') +
+                     (isJunk ? ' junk' : '');
+    
+    item.dataset.path = fullPath;
+    item.dataset.isFile = isFile ? 'true' : 'false';
+    item.dataset.name = name;
+    item.dataset.isJunk = isJunk ? 'true' : 'false';
     
     if (isFile && fullPath === state.currentFile) {
       item.classList.add('active');
+    }
+    
+    // Mark main file with special class
+    if (isFile && fullPath === state.mainFile) {
+      item.classList.add('main-file');
     }
     
     const icon = document.createElement('span');
@@ -1007,14 +1232,61 @@ function renderTreeNode(node, container, path) {
     item.appendChild(icon);
     
     const label = document.createElement('span');
+    label.className = 'file-tree-label';
     label.textContent = name;
     item.appendChild(label);
+    
+    // Add action buttons container
+    const actionsContainer = document.createElement('div');
+    actionsContainer.className = 'file-tree-actions';
+    
+    // Add rename button
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'file-action-btn rename-btn';
+    renameBtn.innerHTML = '✎';
+    renameBtn.title = 'Rename';
+    renameBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (isFile) {
+        renameFile(fullPath);
+      } else {
+        renameFolder(fullPath);
+      }
+    });
+    actionsContainer.appendChild(renameBtn);
+    
+    // Add delete button for files and folders
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'file-action-btn delete-btn';
+    deleteBtn.innerHTML = '×';
+    deleteBtn.title = 'Delete';
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (isFile) {
+        deleteFile(fullPath);
+      } else {
+        deleteFolder(fullPath);
+      }
+    });
+    actionsContainer.appendChild(deleteBtn);
+    
+    item.appendChild(actionsContainer);
     
     container.appendChild(item);
     
     if (isFile) {
       // Click handler for files
-      item.addEventListener('click', () => openFile(fullPath, item));
+      item.addEventListener('click', (e) => {
+        if (!e.target.classList.contains('file-action-btn')) {
+          openFile(fullPath, item);
+        }
+      });
+      
+      // Right-click context menu for file management
+      item.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showFileContextMenu(e, fullPath, name, true);
+      });
     } else {
       // Folder - create children container
       const children = document.createElement('div');
@@ -1024,9 +1296,17 @@ function renderTreeNode(node, container, path) {
       // Click handler for folders
       item.addEventListener('click', (e) => {
         e.stopPropagation();
-        item.classList.toggle('expanded');
-        item.classList.toggle('collapsed');
-        children.classList.toggle('collapsed');
+        if (!e.target.classList.contains('file-action-btn')) {
+          item.classList.toggle('expanded');
+          item.classList.toggle('collapsed');
+          children.classList.toggle('collapsed');
+        }
+      });
+      
+      // Right-click context menu for folder management
+      item.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showFileContextMenu(e, fullPath, name, false);
       });
       
       // Recursively render children
@@ -1039,17 +1319,45 @@ function renderTreeNode(node, container, path) {
  * Open a file from the project
  */
 function openFile(path, itemElement) {
-  if (!state.projectFiles[path]) return;
+  const fileContent = state.projectFiles[path];
+  if (fileContent === undefined) return;
   
-  // Save current file content
+  // Check if this is a binary file
+  const isBinary = fileContent && typeof fileContent === 'object' && fileContent.isBinary;
+  
+  // Save current file content (only for text files)
   if (state.currentFile && state.projectFiles[state.currentFile] !== undefined) {
-    state.projectFiles[state.currentFile] = state.currentLatex;
+    const currentContent = state.projectFiles[state.currentFile];
+    if (!(currentContent && typeof currentContent === 'object' && currentContent.isBinary)) {
+      state.projectFiles[state.currentFile] = state.currentLatex;
+    }
   }
   
   // Load new file
   state.currentFile = path;
-  state.currentLatex = state.projectFiles[path];
-  elements.editor.value = state.currentLatex;
+  
+  if (isBinary) {
+    // Binary file - show preview message instead of content
+    const ext = path.split('.').pop().toLowerCase();
+    let previewMessage = `[Binary file: ${path.split('/').pop()}]\\n\\nThis file cannot be edited directly.`;
+    
+    if (['png', 'jpg', 'jpeg', 'gif', 'svg'].includes(ext)) {
+      previewMessage = `[Image file: ${path.split('/').pop()}]\\n\\nImage preview not available in editor.\\nThe file will be included in your ZIP export.`;
+    } else if (ext === 'pdf') {
+      previewMessage = `[PDF file: ${path.split('/').pop()}]\\n\\nPDF files cannot be edited.\\nThe file will be included in your ZIP export.`;
+    } else if (['ttf', 'otf', 'woff', 'woff2'].includes(ext)) {
+      previewMessage = `[Font file: ${path.split('/').pop()}]\\n\\nFont files cannot be edited.\\nThe file will be included in your ZIP export.`;
+    }
+    
+    state.currentLatex = previewMessage;
+    elements.editor.value = previewMessage;
+    elements.editor.readOnly = true;
+  } else {
+    state.currentLatex = fileContent;
+    elements.editor.value = fileContent;
+    elements.editor.readOnly = false;
+  }
+  
   elements.currentFileName.textContent = path.split('/').pop();
   
   // Update file tree selection
@@ -1060,10 +1368,7 @@ function openFile(path, itemElement) {
     itemElement.classList.add('active');
   }
   
-  // Compile if this is the main file
-  if (path === state.mainFile) {
-    setTimeout(() => compile(), 500);
-  }
+  // Never auto-compile when switching files - user must click compile button
 }
 
 /**
@@ -1100,9 +1405,15 @@ async function downloadProjectZip() {
     
     const zip = new JSZip();
     
-    // Add all files to ZIP
+    // Add all files to ZIP, handling binary files properly
     for (const [path, content] of Object.entries(state.projectFiles)) {
-      zip.file(path, content);
+      if (content && typeof content === 'object' && content.isBinary) {
+        // Binary file stored as base64
+        zip.file(path, content.content, { base64: true });
+      } else {
+        // Text file
+        zip.file(path, content);
+      }
     }
     
     // Generate ZIP
@@ -1143,51 +1454,346 @@ function resolveIncludes(content, currentPath, visitedFiles = new Set()) {
   // Get directory of current file
   const dir = currentPath.split('/').slice(0, -1).join('/');
   
-  // Match \input{file}, \include{file}, \includegraphics{file}
-  const includeRegex = /\\(input|include|includegraphics)(?:\[[^\]]*\])?\{([^}]+)\}/g;
+  // Match \input{file}, \include{file} (not includegraphics - handled in convertLatexToHTML)
+  const includeRegex = /\\(input|include)(?:\[[^\]]*\])?\{([^}]+)\}/g;
   
   let resolved = content;
-  const replacements = new Map(); // Map from original pattern to resolved content
+  const replacements = new Map();
   let match;
   
-  // Collect all unique matches and their replacements
   while ((match = includeRegex.exec(content)) !== null) {
     const fullMatch = match[0];
-    const command = match[1];
-    const filename = match[2];
+    let filename = match[2].trim();
     
-    // Skip if we've already processed this exact include pattern
     if (replacements.has(fullMatch)) continue;
     
-    let resolvedPath = filename;
-    
-    // Add .tex extension if missing for input/include
-    if ((command === 'input' || command === 'include') && !filename.endsWith('.tex')) {
-      resolvedPath = filename + '.tex';
+    // Add .tex extension if missing
+    if (!filename.endsWith('.tex')) {
+      filename = filename + '.tex';
     }
     
-    // Resolve relative path
-    if (!resolvedPath.startsWith('/')) {
-      resolvedPath = dir ? `${dir}/${resolvedPath}` : resolvedPath;
-    } else {
-      resolvedPath = resolvedPath.substring(1); // Remove leading /
+    // Try multiple path resolutions
+    let resolvedPath = null;
+    const pathsToTry = [
+      filename,                              // Exact path as given
+      dir ? `${dir}/${filename}` : filename, // Relative to current file's directory
+    ];
+    
+    // Also try without leading ./
+    if (filename.startsWith('./')) {
+      const cleanName = filename.substring(2);
+      pathsToTry.push(cleanName);
+      pathsToTry.push(dir ? `${dir}/${cleanName}` : cleanName);
     }
     
-    // If file exists in project, include its content for input/include
-    if (state.projectFiles[resolvedPath]) {
-      if (command === 'input' || command === 'include') {
-        const includedContent = resolveIncludes(state.projectFiles[resolvedPath], resolvedPath, new Set(visitedFiles));
-        replacements.set(fullMatch, includedContent);
+    for (const tryPath of pathsToTry) {
+      const fileContent = state.projectFiles[tryPath];
+      if (fileContent && typeof fileContent === 'string') {
+        resolvedPath = tryPath;
+        break;
       }
+    }
+    
+    if (resolvedPath) {
+      const fileContent = state.projectFiles[resolvedPath];
+      const includedContent = resolveIncludes(fileContent, resolvedPath, new Set(visitedFiles));
+      replacements.set(fullMatch, includedContent);
+    } else {
+      // File not found - leave a comment placeholder
+      console.warn(`Include file not found: ${filename}, tried paths:`, pathsToTry);
+      replacements.set(fullMatch, `% [Include not found: ${filename}]`);
     }
   }
   
-  // Apply all replacements
   for (const [pattern, replacement] of replacements) {
     resolved = resolved.replaceAll(pattern, replacement);
   }
   
   return resolved;
+}
+
+// ============================================
+// FILE MANAGEMENT
+// ============================================
+
+let activeContextMenu = null;
+
+/**
+ * Show context menu for file/folder management
+ */
+function showFileContextMenu(e, path, name, isFile) {
+  // Remove any existing context menu
+  hideContextMenu();
+  
+  const menu = document.createElement('div');
+  menu.className = 'file-context-menu';
+  menu.style.position = 'fixed';
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+  menu.style.zIndex = '1000';
+  
+  const menuItems = [];
+  
+  // Check if this is a junk file
+  const isJunk = isMacOSJunk(path) || isMacOSJunk(name);
+  
+  if (isFile) {
+    menuItems.push({ label: 'Rename', action: () => renameFile(path) });
+    menuItems.push({ label: 'Delete', action: () => deleteFile(path), danger: true });
+    if (path.endsWith('.tex') && path !== state.mainFile) {
+      menuItems.push({ label: 'Set as Main', action: () => setAsMainFile(path) });
+    }
+  } else {
+    menuItems.push({ label: 'Add File', action: () => addNewFile(path) });
+    menuItems.push({ label: 'Add Folder', action: () => addNewFolder(path) });
+    menuItems.push({ label: 'Rename', action: () => renameFolder(path) });
+    menuItems.push({ label: 'Delete', action: () => deleteFolder(path), danger: true });
+  }
+  
+  // Add junk-specific option
+  if (isJunk) {
+    menuItems.unshift({ label: '⚠️ This is a junk file', action: () => {}, disabled: true });
+  }
+  
+  // Add clean all junk option
+  menuItems.push({ label: '🧹 Clean All Junk Files', action: () => cleanCurrentProject() });
+  
+  // Add root-level options when right-clicking
+  menuItems.unshift({ label: 'New File (root)', action: () => addNewFile('') });
+  
+  menuItems.forEach(item => {
+    const menuItem = document.createElement('div');
+    menuItem.className = 'context-menu-item' + 
+                         (item.danger ? ' danger' : '') +
+                         (item.disabled ? ' disabled' : '');
+    menuItem.textContent = item.label;
+    if (!item.disabled) {
+      menuItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideContextMenu();
+        item.action();
+      });
+    }
+    menu.appendChild(menuItem);
+  });
+  
+  document.body.appendChild(menu);
+  activeContextMenu = menu;
+  
+  // Close menu on click outside
+  setTimeout(() => {
+    document.addEventListener('click', hideContextMenu, { once: true });
+  }, 0);
+}
+
+function hideContextMenu() {
+  if (activeContextMenu) {
+    activeContextMenu.remove();
+    activeContextMenu = null;
+  }
+}
+
+/**
+ * Add a new file to the project
+ */
+function addNewFile(parentPath) {
+  const filename = prompt('Enter new file name (e.g., chapter1.tex):');
+  if (!filename) return;
+  
+  const newPath = parentPath ? `${parentPath}/${filename}` : filename;
+  
+  if (state.projectFiles[newPath]) {
+    showErrorToast('File already exists');
+    return;
+  }
+  
+  // Default content based on file type
+  let content = '';
+  if (filename.endsWith('.tex')) {
+    content = '% ' + filename + '\n\n';
+  }
+  
+  state.projectFiles[newPath] = content;
+  
+  // Rebuild file tree
+  buildFileTree(state.projectFiles);
+  
+  // Open the new file
+  openFile(newPath, null);
+  
+  showSuccessToast(`Created ${filename}`);
+}
+
+/**
+ * Add a new folder to the project
+ */
+function addNewFolder(parentPath) {
+  const foldername = prompt('Enter new folder name:');
+  if (!foldername) return;
+  
+  // Add a placeholder .gitkeep file to create the folder structure
+  const placeholderPath = parentPath ? `${parentPath}/${foldername}/.gitkeep` : `${foldername}/.gitkeep`;
+  
+  if (state.projectFiles[placeholderPath]) {
+    showErrorToast('Folder already exists');
+    return;
+  }
+  
+  state.projectFiles[placeholderPath] = '';
+  
+  // Rebuild file tree
+  buildFileTree(state.projectFiles);
+  
+  showSuccessToast(`Created folder ${foldername}`);
+}
+
+/**
+ * Rename a file
+ */
+function renameFile(oldPath) {
+  const oldName = oldPath.split('/').pop();
+  const newName = prompt('Enter new file name:', oldName);
+  if (!newName || newName === oldName) return;
+  
+  const pathParts = oldPath.split('/');
+  pathParts[pathParts.length - 1] = newName;
+  const newPath = pathParts.join('/');
+  
+  if (state.projectFiles[newPath]) {
+    showErrorToast('A file with this name already exists');
+    return;
+  }
+  
+  // Move content to new path
+  state.projectFiles[newPath] = state.projectFiles[oldPath];
+  delete state.projectFiles[oldPath];
+  
+  // Update current file reference if needed
+  if (state.currentFile === oldPath) {
+    state.currentFile = newPath;
+    elements.currentFileName.textContent = newName;
+  }
+  
+  // Update main file reference if needed
+  if (state.mainFile === oldPath) {
+    state.mainFile = newPath;
+  }
+  
+  // Rebuild file tree
+  buildFileTree(state.projectFiles);
+  
+  showSuccessToast(`Renamed to ${newName}`);
+}
+
+/**
+ * Rename a folder (moves all files within)
+ */
+function renameFolder(oldPath) {
+  const oldName = oldPath.split('/').pop();
+  const newName = prompt('Enter new folder name:', oldName);
+  if (!newName || newName === oldName) return;
+  
+  const pathParts = oldPath.split('/');
+  pathParts[pathParts.length - 1] = newName;
+  const newPath = pathParts.join('/');
+  
+  // Move all files in the folder
+  const filesToMove = Object.keys(state.projectFiles).filter(p => 
+    p === oldPath || p.startsWith(oldPath + '/')
+  );
+  
+  for (const filePath of filesToMove) {
+    const newFilePath = filePath.replace(oldPath, newPath);
+    state.projectFiles[newFilePath] = state.projectFiles[filePath];
+    delete state.projectFiles[filePath];
+    
+    // Update references
+    if (state.currentFile === filePath) {
+      state.currentFile = newFilePath;
+    }
+    if (state.mainFile === filePath) {
+      state.mainFile = newFilePath;
+    }
+  }
+  
+  // Rebuild file tree
+  buildFileTree(state.projectFiles);
+  
+  showSuccessToast(`Renamed folder to ${newName}`);
+}
+
+/**
+ * Delete a file
+ */
+function deleteFile(path) {
+  const filename = path.split('/').pop();
+  if (!confirm(`Delete ${filename}? This cannot be undone.`)) return;
+  
+  if (path === state.mainFile) {
+    showErrorToast('Cannot delete the main file');
+    return;
+  }
+  
+  delete state.projectFiles[path];
+  
+  // If deleted file was current, switch to main file
+  if (state.currentFile === path) {
+    state.currentFile = state.mainFile;
+    state.currentLatex = state.projectFiles[state.mainFile] || '';
+    elements.editor.value = state.currentLatex;
+    elements.currentFileName.textContent = state.mainFile ? state.mainFile.split('/').pop() : 'LaTeX Source';
+  }
+  
+  // Rebuild file tree
+  buildFileTree(state.projectFiles);
+  
+  showSuccessToast(`Deleted ${filename}`);
+}
+
+/**
+ * Delete a folder and all its contents
+ */
+function deleteFolder(path) {
+  const foldername = path.split('/').pop();
+  if (!confirm(`Delete folder "${foldername}" and all its contents? This cannot be undone.`)) return;
+  
+  // Check if main file is in this folder
+  if (state.mainFile && state.mainFile.startsWith(path + '/')) {
+    showErrorToast('Cannot delete folder containing the main file');
+    return;
+  }
+  
+  // Delete all files in folder
+  const filesToDelete = Object.keys(state.projectFiles).filter(p => 
+    p.startsWith(path + '/')
+  );
+  
+  for (const filePath of filesToDelete) {
+    delete state.projectFiles[filePath];
+    
+    if (state.currentFile === filePath) {
+      state.currentFile = state.mainFile;
+      state.currentLatex = state.projectFiles[state.mainFile] || '';
+      elements.editor.value = state.currentLatex;
+      elements.currentFileName.textContent = state.mainFile ? state.mainFile.split('/').pop() : 'LaTeX Source';
+    }
+  }
+  
+  // Rebuild file tree
+  buildFileTree(state.projectFiles);
+  
+  showSuccessToast(`Deleted folder ${foldername}`);
+}
+
+/**
+ * Set a .tex file as the main file for compilation
+ */
+function setAsMainFile(path) {
+  state.mainFile = path;
+  showSuccessToast(`${path.split('/').pop()} is now the main file`);
+  
+  // Rebuild file tree to update visual indication
+  buildFileTree(state.projectFiles);
 }
 
 function hideToast(type) {

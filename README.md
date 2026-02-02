@@ -1,4 +1,4 @@
-# latex-editor
+# LaTeX Editor
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -8,108 +8,159 @@ A free, open source LaTeX editor with real-time preview capabilities. Think Over
 
 ## ✨ Features
 
-- **Real-time Preview**: See your LaTeX document rendered as you type
+- **Real-time Preview**: See your LaTeX document rendered as you type (optional auto-compile)
 - **No Compilation Limits**: Compile as many documents as you want, whenever you want
+- **Multi-file Projects**: Upload ZIP files with multiple .tex files, images, and fonts
 - **Syntax Highlighting**: Full LaTeX syntax highlighting for easier editing
+- **File Management**: Add, rename, and delete files directly in the browser
 - **Free & Open Source**: No paywalls, no subscriptions, no restrictions
-- **Self-Hostable**: Run it locally or deploy to your own server
+- **Self-Hostable**: Run it locally with Docker or deploy to your own server
+- **Client-side Processing**: All processing happens in your browser
 
 ## 🚀 Quick Start
 
-### Prerequisites
-
-- Node.js (v18 or higher)
-- npm or yarn
-- LaTeX distribution (TeX Live or MiKTeX) for local compilation
-
-### Installation
+### Using Docker (Recommended)
 
 ```bash
 # Clone the repository
 git clone https://github.com/mbianchidev/latex-editor.git
 cd latex-editor
 
-# Install dependencies (coming soon)
-npm install
+# Start with Docker Compose
+docker compose up -d
 
-# Start development server (coming soon)
-npm run dev
+# Open http://localhost in your browser
 ```
 
-### Usage
+### Manual Setup
 
 ```bash
-# Build for production (coming soon)
-npm run build
-
-# Run tests (coming soon)
-npm test
+# Serve the frontend folder with any static server
+cd frontend
+python3 -m http.server 8080
+# Open http://localhost:8080
 ```
 
-## 📚 Documentation
+## 📖 User Guide
 
-- **[Contributing Guide](CONTRIBUTING.md)** - Learn how to contribute to the project
-- **[Technical Documentation](AGENTS.md)** - Architecture, design principles, and development guide
-- **[Support](SUPPORT.md)** - Get help and find resources
-- **[Security Policy](SECURITY.md)** - Report security vulnerabilities
+### Interface Overview
 
-## 🎯 Project Status
+| Panel | Description |
+|-------|-------------|
+| **Header Bar** | New document, upload ZIP, download .tex/.zip/PDF buttons |
+| **File Tree** (left) | Shown when a ZIP project is loaded - manage files here |
+| **Editor** (center-left) | Write your LaTeX code with syntax highlighting |
+| **Preview** (right) | Live rendered preview of your document |
+| **Status Bar** | Compilation status and cursor position |
 
-This project is currently in **early development**. We're building the foundation and would love your contributions! Check out our [open issues](https://github.com/mbianchidev/latex-editor/issues) to see what we're working on.
+### Keyboard Shortcuts
 
-### Roadmap
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Enter` | Compile document |
+| `Tab` | Insert 2 spaces |
 
-- [ ] Basic editor interface with syntax highlighting
-- [ ] Real-time PDF preview
-- [ ] Local file storage
-- [ ] Export to PDF
-- [ ] Auto-completion for LaTeX commands
-- [ ] Collaborative editing
-- [ ] Cloud storage integration
+### Working with Projects
+
+1. **Upload a ZIP file** containing your LaTeX project
+2. Files starting with `._` or in `__MACOSX` folders are automatically filtered
+3. Use the file tree to navigate between files
+4. Right-click files for rename/delete options
+5. The main .tex file is auto-detected (or set manually)
+
+### Auto-Compile Toggle
+
+The "Auto" checkbox controls automatic compilation:
+- **Off (default)**: Manual compile only - click ▶ or press `Ctrl+Enter`
+- **On**: Auto-compile 3 seconds after you stop typing
+
+## 📝 LaTeX Examples
+
+### Basic Document
+
+```latex
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+
+\title{My Document}
+\author{Your Name}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+Your content here.
+
+\end{document}
+```
+
+### Mathematical Equations
+
+```latex
+\begin{equation}
+    E = mc^2
+\end{equation}
+
+\begin{equation}
+    \int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}
+\end{equation}
+```
+
+### Lists
+
+```latex
+\begin{itemize}
+    \item First item
+    \item Second item
+    \begin{itemize}
+        \item Nested item
+    \end{itemize}
+\end{itemize}
+```
+
+## 🛠️ Technology Stack
+
+- **Frontend**: HTML5, CSS3, Vanilla JavaScript (ES6+)
+- **Libraries**: MathJax 3, jsPDF, html2canvas, JSZip
+- **Backend**: Python/Flask (for health checks only)
+- **Container**: Docker with nginx
+
+## 📁 Project Structure
+
+```
+latex-editor/
+├── frontend/           # Main application
+│   ├── index.html      # HTML structure
+│   ├── styles.css      # Design system
+│   ├── app.js          # Application logic
+│   └── nginx.conf      # Web server config
+├── backend/            # Health check API
+├── docker-compose.yml  # Container orchestration
+├── CONTRIBUTING.md     # Contribution guidelines
+└── README.md           # This file
+```
 
 ## 🤝 Contributing
 
-We welcome contributions from everyone! Whether you're fixing bugs, adding features, improving documentation, or suggesting ideas, your help is appreciated.
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-**Getting Started:**
+**Quick start for contributors:**
 
-1. Read our [Contributing Guide](CONTRIBUTING.md)
-2. Check out [good first issues](https://github.com/mbianchidev/latex-editor/labels/good%20first%20issue)
-3. Join the conversation in [Issues](https://github.com/mbianchidev/latex-editor/issues)
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) for details.
 
 ## 🔒 Security
 
-Found a security vulnerability? Please follow our [Security Policy](SECURITY.md) to report it responsibly.
+Found a vulnerability? See [SECURITY.md](SECURITY.md) for reporting guidelines.
 
 ## 💬 Support
 
-Need help? Check out our [Support Guide](SUPPORT.md) for:
-
-- How to get help
-- Where to ask questions
-- Community resources
-- LaTeX learning resources
-
-## 📜 Code of Conduct
-
-This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to the project maintainers.
-
-## 🙏 Acknowledgments
-
-- Inspired by [Overleaf](https://www.overleaf.com/) but without being a paid product at all
-- Built with modern web technologies
-- Powered by the LaTeX community
-
-## 📧 Contact
-
-- **Maintainer**: [@mbianchidev](https://github.com/mbianchidev)
-- **Repository**: [github.com/mbianchidev/latex-editor](https://github.com/mbianchidev/latex-editor)
-- **Issues**: [Open an issue](https://github.com/mbianchidev/latex-editor/issues/new/choose)
-
----
-
-**Made with ❤️ by mbianchidev**
+Need help? Check [SUPPORT.md](SUPPORT.md) for resources.
