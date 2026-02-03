@@ -174,6 +174,21 @@ class TestDocumentsEndpoint:
         })
         assert response.status_code == 404
     
+    def test_update_document_requires_field(self, client):
+        """PUT /api/v1/documents/:id should require at least one field to update"""
+        # First create a document
+        create_response = client.post("/api/v1/documents", json={
+            "title": "Original Title",
+            "content": "Original Content"
+        })
+        doc_id = create_response.get_json()["id"]
+        
+        # Try to update with empty body
+        response = client.put(f"/api/v1/documents/{doc_id}", json={})
+        assert response.status_code == 400
+        data = response.get_json()
+        assert "error" in data
+    
     def test_delete_document(self, client):
         """DELETE /api/v1/documents/:id should delete the document"""
         # First create a document

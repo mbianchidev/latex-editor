@@ -108,28 +108,42 @@ def document_operations(doc_id):
     """
     Operations on a specific document by ID
     """
+    # Check existence with minimal lock
     with documents_lock:
         if doc_id not in documents:
             return jsonify({"error": "Document not found"}), 404
         
         if request.method == "GET":
-            return jsonify(documents[doc_id])
+            doc = documents[doc_id].copy()
+    
+    if request.method == "GET":
+        return jsonify(doc)
+    
+    if request.method == "PUT":
+        data = request.get_json(silent=True)
+        if data is None:
+            return jsonify({"error": "Request body must be JSON"}), 400
         
-        if request.method == "PUT":
-            data = request.get_json(silent=True)
-            if not data:
-                return jsonify({"error": "Request body must be JSON"}), 400
-            
+        if "title" not in data and "content" not in data:
+            return jsonify({"error": "At least one of 'title' or 'content' must be provided"}), 400
+        
+        with documents_lock:
+            if doc_id not in documents:
+                return jsonify({"error": "Document not found"}), 404
             if "title" in data:
                 documents[doc_id]["title"] = data["title"]
             if "content" in data:
                 documents[doc_id]["content"] = data["content"]
-            
-            return jsonify(documents[doc_id])
+            doc = documents[doc_id].copy()
         
-        # DELETE - returns 204 No Content per REST conventions
+        return jsonify(doc)
+    
+    # DELETE - returns 204 No Content per REST conventions
+    with documents_lock:
+        if doc_id not in documents:
+            return jsonify({"error": "Document not found"}), 404
         del documents[doc_id]
-        return "", 204
+    return "", 204
 
 
 @app.errorhandler(404)
