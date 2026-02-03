@@ -296,7 +296,7 @@ function initializeEventListeners() {
     elements.newFileBtn.addEventListener('click', () => {
       // If not in project mode, create a new project first
       if (!state.projectMode) {
-        if (confirm('Create a new project to add files? This will replace the current document.')) {
+        if (confirm('Create a new project to add files? Unsaved changes to the current document will be lost.')) {
           newProject();
         }
         return;
@@ -308,7 +308,7 @@ function initializeEventListeners() {
     elements.newFolderBtn.addEventListener('click', () => {
       // If not in project mode, create a new project first
       if (!state.projectMode) {
-        if (confirm('Create a new project to add folders? This will replace the current document.')) {
+        if (confirm('Create a new project to add folders? Unsaved changes to the current document will be lost.')) {
           newProject();
         }
         return;
@@ -451,7 +451,7 @@ function convertLatexToHTML(latex) {
       for (const ext of extensions) {
         const imgPath = filename + ext;
         const imgData = state.projectFiles[imgPath];
-        if (imgData && typeof imgData === 'object' && imgData.isBinary) {
+        if (isBinaryContent(imgData)) {
           // Determine mime type
           const actualExt = imgPath.split('.').pop().toLowerCase();
           const mimeTypes = {
@@ -870,12 +870,20 @@ function newProject() {
   }
   
   // Create basic project structure
+  // Convert project name to title case
+  const projectTitle = projectName
+    .replace(/-/g, ' ')
+    .replace(/_/g, ' ')
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+  
   const mainContent = `\\documentclass{article}
 \\usepackage[utf8]{inputenc}
 \\usepackage{amsmath}
 \\usepackage{graphicx}
 
-\\title{${projectName.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}}
+\\title{${projectTitle}}
 \\author{Your Name}
 \\date{\\today}
 
@@ -937,33 +945,41 @@ This is your new LaTeX project. Edit this file or create new sections.
 // ============================================
 
 /**
- * Compress string using LZW algorithm (simple implementation)
+ * Encode string for localStorage storage (base64 + URI encoding)
+ * Handles unicode characters safely for localStorage
  */
-function compressString(str) {
+function encodeForStorage(str) {
   if (!str) return '';
   
   try {
-    // Use base64 encoding with a simple compression approach
-    // For larger projects, we could use a more sophisticated algorithm
+    // Use base64 encoding with URI encoding for safe storage
+    // This handles unicode characters properly
     return btoa(encodeURIComponent(str));
   } catch (error) {
-    console.error('Compression failed:', error);
+    console.error('Encoding failed:', error);
     return str;
   }
 }
 
 /**
- * Decompress string
+ * Decode string from localStorage storage
  */
-function decompressString(str) {
+function decodeFromStorage(str) {
   if (!str) return '';
   
   try {
     return decodeURIComponent(atob(str));
   } catch (error) {
-    console.error('Decompression failed:', error);
+    console.error('Decoding failed:', error);
     return str;
   }
+}
+
+/**
+ * Check if content represents a binary file
+ */
+function isBinaryContent(content) {
+  return content && typeof content === 'object' && content.isBinary;
 }
 
 /**
@@ -994,7 +1010,7 @@ function saveProjectToLocalStorage() {
     if (state.currentFile && state.projectFiles[state.currentFile] !== undefined) {
       const currentContent = state.projectFiles[state.currentFile];
       // Only update if it's a text file (not binary)
-      if (!(currentContent && typeof currentContent === 'object' && currentContent.isBinary)) {
+      if (!isBinaryContent(currentContent)) {
         state.projectFiles[state.currentFile] = state.currentLatex;
       }
     }
@@ -1002,13 +1018,12 @@ function saveProjectToLocalStorage() {
     const projectData = {
       files: state.projectFiles,
       mainFile: state.mainFile,
-      currentFile: state.currentFile,
-      savedAt: new Date().toISOString()
+      currentFile: state.currentFile
     };
     
-    // Compress and save
-    const compressed = compressString(JSON.stringify(projectData));
-    localStorage.setItem('latexEditor_project', compressed);
+    // Encode and save
+    const encoded = encodeForStorage(JSON.stringify(projectData));
+    localStorage.setItem('latexEditor_project', encoded);
     localStorage.setItem('latexEditor_projectMode', 'true');
     
     console.log('Project saved to localStorage');
@@ -1055,10 +1070,10 @@ function loadFromLocalStorage() {
  */
 function loadProjectFromLocalStorage() {
   try {
-    const compressed = localStorage.getItem('latexEditor_project');
-    if (!compressed) return false;
+    const encoded = localStorage.getItem('latexEditor_project');
+    if (!encoded) return false;
     
-    const projectDataStr = decompressString(compressed);
+    const projectDataStr = decodeFromStorage(encoded);
     const projectData = JSON.parse(projectDataStr);
     
     if (!projectData.files || Object.keys(projectData.files).length === 0) {
@@ -1073,7 +1088,7 @@ function loadProjectFromLocalStorage() {
     
     // Load current file content
     const fileContent = state.projectFiles[state.currentFile];
-    if (fileContent && typeof fileContent === 'object' && fileContent.isBinary) {
+    if (isBinaryContent(fileContent)) {
       state.currentLatex = `[Binary file: ${state.currentFile}]`;
       elements.editor.readOnly = true;
     } else {
@@ -1620,12 +1635,12 @@ function openFile(path, itemElement) {
   if (fileContent === undefined) return;
   
   // Check if this is a binary file
-  const isBinary = fileContent && typeof fileContent === 'object' && fileContent.isBinary;
+  const isBinary = isBinaryContent(fileContent);
   
   // Save current file content (only for text files)
   if (state.currentFile && state.projectFiles[state.currentFile] !== undefined) {
     const currentContent = state.projectFiles[state.currentFile];
-    if (!(currentContent && typeof currentContent === 'object' && currentContent.isBinary)) {
+    if (!isBinaryContent(currentContent)) {
       state.projectFiles[state.currentFile] = state.currentLatex;
     }
   }
@@ -1704,7 +1719,7 @@ async function downloadProjectZip() {
     
     // Add all files to ZIP, handling binary files properly
     for (const [path, content] of Object.entries(state.projectFiles)) {
-      if (content && typeof content === 'object' && content.isBinary) {
+      if (isBinaryContent(content)) {
         // Binary file stored as base64
         zip.file(path, content.content, { base64: true });
       } else {
