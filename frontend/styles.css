@@ -1121,3 +1121,84 @@ button {
   width: 16px;
   height: 16px;
 }
+
+/* ============================================
+   DROPDOWN MENU
+   ============================================ */
+.dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.dropdown-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dropdown-arrow {
+  width: 14px;
+  height: 14px;
+  margin-left: -4px;
+  transition: transform var(--transition-fast);
+}
+
+.dropdown.open .dropdown-arrow {
+  transform: rotate(180deg);
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: var(--space-1);
+  min-width: 160px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  display: none;
+  overflow: hidden;
+}
+
+.dropdown.open .dropdown-menu {
+  display: block;
+  animation: fadeInDown var(--transition-fast);
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.dropdown-item:hover {
+  background: var(--color-accent-light);
+}
+
+.dropdown-item .icon {
+  width: 16px;
+  height: 16px;
+  color: var(--color-accent);
+}

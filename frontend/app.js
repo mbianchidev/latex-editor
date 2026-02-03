@@ -137,6 +137,10 @@ const elements = {
   previewContainer: document.getElementById('previewContainer'),
   compileBtn: document.getElementById('compileBtn'),
   newDocBtn: document.getElementById('newDoc'),
+  newDropdown: document.getElementById('newDropdown'),
+  newDropdownMenu: document.getElementById('newDropdownMenu'),
+  newDocItem: document.getElementById('newDocItem'),
+  newProjectItem: document.getElementById('newProjectItem'),
   downloadPdfBtn: document.getElementById('downloadPdf'),
   downloadTexBtn: document.getElementById('downloadTex'),
   uploadZipBtn: document.getElementById('uploadZip'),
@@ -163,7 +167,9 @@ const elements = {
   toggleFileTreeBtn: document.getElementById('toggleFileTree'),
   closeFileTreeBtn: document.getElementById('closeFileTree'),
   cleanProjectBtn: document.getElementById('cleanProjectBtn'),
-  currentFileName: document.getElementById('currentFileName')
+  currentFileName: document.getElementById('currentFileName'),
+  newFileBtn: document.getElementById('newFileBtn'),
+  newFolderBtn: document.getElementById('newFolderBtn')
 };
 
 // ============================================
@@ -234,8 +240,38 @@ function initializeEventListeners() {
   // Compile button
   elements.compileBtn.addEventListener('click', compile);
   
-  // New document
-  elements.newDocBtn.addEventListener('click', newDocument);
+  // New document/project dropdown
+  if (elements.newDocBtn && elements.newDropdown) {
+    elements.newDocBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      elements.newDropdown.classList.toggle('open');
+    });
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (elements.newDropdown && !elements.newDropdown.contains(e.target)) {
+        elements.newDropdown.classList.remove('open');
+      }
+    });
+    
+    // New document item
+    if (elements.newDocItem) {
+      elements.newDocItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        elements.newDropdown.classList.remove('open');
+        newDocument();
+      });
+    }
+    
+    // New project item
+    if (elements.newProjectItem) {
+      elements.newProjectItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        elements.newDropdown.classList.remove('open');
+        newProject();
+      });
+    }
+  }
   
   // ZIP upload
   elements.uploadZipBtn.addEventListener('click', () => elements.zipFileInput.click());
@@ -254,6 +290,32 @@ function initializeEventListeners() {
   elements.toggleFileTreeBtn.addEventListener('click', toggleFileTree);
   elements.closeFileTreeBtn.addEventListener('click', () => toggleFileTree(false));
   elements.cleanProjectBtn.addEventListener('click', cleanCurrentProject);
+  
+  // New file/folder buttons in file tree header
+  if (elements.newFileBtn) {
+    elements.newFileBtn.addEventListener('click', () => {
+      // If not in project mode, create a new project first
+      if (!state.projectMode) {
+        if (confirm('Create a new project to add files? This will replace the current document.')) {
+          newProject();
+        }
+        return;
+      }
+      addNewFile('');
+    });
+  }
+  if (elements.newFolderBtn) {
+    elements.newFolderBtn.addEventListener('click', () => {
+      // If not in project mode, create a new project first
+      if (!state.projectMode) {
+        if (confirm('Create a new project to add folders? This will replace the current document.')) {
+          newProject();
+        }
+        return;
+      }
+      addNewFolder('');
+    });
+  }
   
   // Toast close buttons
   elements.closeError.addEventListener('click', () => hideToast('error'));
@@ -765,8 +827,29 @@ function newDocument() {
     return;
   }
   
+  // Reset project state
+  state.projectMode = false;
+  state.projectFiles = {};
+  state.currentFile = null;
+  state.mainFile = null;
+  
   state.currentLatex = DEFAULT_TEMPLATE;
   elements.editor.value = DEFAULT_TEMPLATE;
+  elements.editor.readOnly = false;
+  elements.currentFileName.textContent = 'LaTeX Source';
+  
+  // Hide file tree and download ZIP button
+  elements.fileTree.classList.remove('visible');
+  elements.toggleFileTreeBtn.style.display = 'none';
+  elements.downloadZipBtn.style.display = 'none';
+  
+  // Clear project from localStorage
+  try {
+    localStorage.removeItem('latexEditor_project');
+    localStorage.removeItem('latexEditor_projectMode');
+  } catch (error) {
+    console.error('Failed to clear project from localStorage:', error);
+  }
   
   saveToLocalStorage();
   
@@ -774,34 +857,245 @@ function newDocument() {
   compile(true);
 }
 
+/**
+ * Create a new multi-file project from scratch
+ */
+function newProject() {
+  const projectName = prompt('Enter project name:', 'my-project');
+  if (!projectName) return;
+  
+  if (state.projectMode && Object.keys(state.projectFiles).length > 0 &&
+      !confirm('Create new project? Current project will be lost.')) {
+    return;
+  }
+  
+  // Create basic project structure
+  const mainContent = `\\documentclass{article}
+\\usepackage[utf8]{inputenc}
+\\usepackage{amsmath}
+\\usepackage{graphicx}
+
+\\title{${projectName.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}}
+\\author{Your Name}
+\\date{\\today}
+
+\\begin{document}
+
+\\maketitle
+
+\\input{sections/introduction}
+
+\\end{document}
+`;
+
+  const introContent = `\\section{Introduction}
+
+This is your new LaTeX project. Edit this file or create new sections.
+
+\\subsection{Getting Started}
+
+\\begin{itemize}
+    \\item Add more sections using \\texttt{\\\\input{sections/filename}}
+    \\item Upload images to an \\texttt{images/} folder
+    \\item Add custom fonts to a \\texttt{fonts/} folder
+\\end{itemize}
+`;
+
+  // Initialize project files
+  state.projectFiles = {
+    'main.tex': mainContent,
+    'sections/introduction.tex': introContent
+  };
+  
+  state.mainFile = 'main.tex';
+  state.currentFile = 'main.tex';
+  state.projectMode = true;
+  state.currentLatex = mainContent;
+  
+  // Update UI
+  elements.editor.value = mainContent;
+  elements.editor.readOnly = false;
+  elements.currentFileName.textContent = 'main.tex';
+  
+  // Build and show file tree
+  buildFileTree(state.projectFiles);
+  elements.fileTree.classList.add('visible');
+  elements.toggleFileTreeBtn.style.display = 'inline-block';
+  elements.downloadZipBtn.style.display = 'inline-block';
+  
+  // Save project to localStorage
+  saveProjectToLocalStorage();
+  
+  showSuccessToast(`Created project: ${projectName}`);
+  
+  // Compile the new project
+  compile(true);
+}
+
 // ============================================
 // LOCAL STORAGE
 // ============================================
 
+/**
+ * Compress string using LZW algorithm (simple implementation)
+ */
+function compressString(str) {
+  if (!str) return '';
+  
+  try {
+    // Use base64 encoding with a simple compression approach
+    // For larger projects, we could use a more sophisticated algorithm
+    return btoa(encodeURIComponent(str));
+  } catch (error) {
+    console.error('Compression failed:', error);
+    return str;
+  }
+}
+
+/**
+ * Decompress string
+ */
+function decompressString(str) {
+  if (!str) return '';
+  
+  try {
+    return decodeURIComponent(atob(str));
+  } catch (error) {
+    console.error('Decompression failed:', error);
+    return str;
+  }
+}
+
+/**
+ * Save current state to localStorage
+ */
 function saveToLocalStorage() {
   try {
     localStorage.setItem('latexEditor_content', state.currentLatex);
     localStorage.setItem('latexEditor_zoom', state.zoom.toString());
+    
+    // If in project mode, also save the project
+    if (state.projectMode) {
+      saveProjectToLocalStorage();
+    }
   } catch (error) {
     console.error('Failed to save to localStorage:', error);
   }
 }
 
+/**
+ * Save project to localStorage with compression
+ */
+function saveProjectToLocalStorage() {
+  if (!state.projectMode) return;
+  
+  try {
+    // Save current file content first
+    if (state.currentFile && state.projectFiles[state.currentFile] !== undefined) {
+      const currentContent = state.projectFiles[state.currentFile];
+      // Only update if it's a text file (not binary)
+      if (!(currentContent && typeof currentContent === 'object' && currentContent.isBinary)) {
+        state.projectFiles[state.currentFile] = state.currentLatex;
+      }
+    }
+    
+    const projectData = {
+      files: state.projectFiles,
+      mainFile: state.mainFile,
+      currentFile: state.currentFile,
+      savedAt: new Date().toISOString()
+    };
+    
+    // Compress and save
+    const compressed = compressString(JSON.stringify(projectData));
+    localStorage.setItem('latexEditor_project', compressed);
+    localStorage.setItem('latexEditor_projectMode', 'true');
+    
+    console.log('Project saved to localStorage');
+  } catch (error) {
+    console.error('Failed to save project to localStorage:', error);
+    // If storage quota exceeded, show a warning
+    if (error.name === 'QuotaExceededError') {
+      showErrorToast('Storage quota exceeded. Consider downloading your project as ZIP.');
+    }
+  }
+}
+
+/**
+ * Load from localStorage
+ */
 function loadFromLocalStorage() {
   try {
-    const savedContent = localStorage.getItem('latexEditor_content');
     const savedZoom = localStorage.getItem('latexEditor_zoom');
-    
-    if (savedContent && savedContent !== DEFAULT_TEMPLATE) {
-      state.currentLatex = savedContent;
-      elements.editor.value = savedContent;
-    }
+    const isProjectMode = localStorage.getItem('latexEditor_projectMode') === 'true';
     
     if (savedZoom) {
       setZoom(parseFloat(savedZoom));
     }
+    
+    // Try to load project first
+    if (isProjectMode) {
+      const success = loadProjectFromLocalStorage();
+      if (success) return;
+    }
+    
+    // Fall back to simple document
+    const savedContent = localStorage.getItem('latexEditor_content');
+    if (savedContent && savedContent !== DEFAULT_TEMPLATE) {
+      state.currentLatex = savedContent;
+      elements.editor.value = savedContent;
+    }
   } catch (error) {
     console.error('Failed to load from localStorage:', error);
+  }
+}
+
+/**
+ * Load project from localStorage
+ */
+function loadProjectFromLocalStorage() {
+  try {
+    const compressed = localStorage.getItem('latexEditor_project');
+    if (!compressed) return false;
+    
+    const projectDataStr = decompressString(compressed);
+    const projectData = JSON.parse(projectDataStr);
+    
+    if (!projectData.files || Object.keys(projectData.files).length === 0) {
+      return false;
+    }
+    
+    // Restore project state
+    state.projectFiles = projectData.files;
+    state.mainFile = projectData.mainFile;
+    state.currentFile = projectData.currentFile || projectData.mainFile;
+    state.projectMode = true;
+    
+    // Load current file content
+    const fileContent = state.projectFiles[state.currentFile];
+    if (fileContent && typeof fileContent === 'object' && fileContent.isBinary) {
+      state.currentLatex = `[Binary file: ${state.currentFile}]`;
+      elements.editor.readOnly = true;
+    } else {
+      state.currentLatex = fileContent || '';
+      elements.editor.readOnly = false;
+    }
+    elements.editor.value = state.currentLatex;
+    elements.currentFileName.textContent = state.currentFile ? state.currentFile.split('/').pop() : 'LaTeX Source';
+    
+    // Build and show file tree
+    buildFileTree(state.projectFiles);
+    elements.fileTree.classList.add('visible');
+    elements.toggleFileTreeBtn.style.display = 'inline-block';
+    elements.downloadZipBtn.style.display = 'inline-block';
+    
+    console.log('Project loaded from localStorage');
+    showSuccessToast('Project restored from last session');
+    
+    return true;
+  } catch (error) {
+    console.error('Failed to load project from localStorage:', error);
+    return false;
   }
 }
 
@@ -1147,6 +1441,9 @@ async function handleZipUpload(event) {
     if (skippedCount > 0) {
       console.log(`Filtered out ${skippedCount} macOS metadata files`);
     }
+    
+    // Auto-save project to localStorage after loading
+    saveProjectToLocalStorage();
     
     showSuccessToast(`Loaded ${Object.keys(files).length} files`);
     
@@ -1621,6 +1918,9 @@ function addNewFile(parentPath) {
   // Open the new file
   openFile(newPath, null);
   
+  // Auto-save project
+  saveProjectToLocalStorage();
+  
   showSuccessToast(`Created ${filename}`);
 }
 
@@ -1643,6 +1943,9 @@ function addNewFolder(parentPath) {
   
   // Rebuild file tree
   buildFileTree(state.projectFiles);
+  
+  // Auto-save project
+  saveProjectToLocalStorage();
   
   showSuccessToast(`Created folder ${foldername}`);
 }
@@ -1682,6 +1985,9 @@ function renameFile(oldPath) {
   // Rebuild file tree
   buildFileTree(state.projectFiles);
   
+  // Auto-save project
+  saveProjectToLocalStorage();
+  
   showSuccessToast(`Renamed to ${newName}`);
 }
 
@@ -1719,6 +2025,9 @@ function renameFolder(oldPath) {
   // Rebuild file tree
   buildFileTree(state.projectFiles);
   
+  // Auto-save project
+  saveProjectToLocalStorage();
+  
   showSuccessToast(`Renamed folder to ${newName}`);
 }
 
@@ -1746,6 +2055,9 @@ function deleteFile(path) {
   
   // Rebuild file tree
   buildFileTree(state.projectFiles);
+  
+  // Auto-save project
+  saveProjectToLocalStorage();
   
   showSuccessToast(`Deleted ${filename}`);
 }
@@ -1782,6 +2094,9 @@ function deleteFolder(path) {
   // Rebuild file tree
   buildFileTree(state.projectFiles);
   
+  // Auto-save project
+  saveProjectToLocalStorage();
+  
   showSuccessToast(`Deleted folder ${foldername}`);
 }
 
@@ -1794,6 +2109,9 @@ function setAsMainFile(path) {
   
   // Rebuild file tree to update visual indication
   buildFileTree(state.projectFiles);
+  
+  // Auto-save project
+  saveProjectToLocalStorage();
 }
 
 function hideToast(type) {
