@@ -185,7 +185,7 @@ class TestDocumentsEndpoint:
         
         # Delete it
         response = client.delete(f"/api/v1/documents/{doc_id}")
-        assert response.status_code == 200
+        assert response.status_code == 204
         
         # Verify it's gone
         get_response = client.get(f"/api/v1/documents/{doc_id}")

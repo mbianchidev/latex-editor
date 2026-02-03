@@ -4,6 +4,7 @@ Provides health check and future API endpoints for LaTeX compilation
 """
 import os
 import uuid
+import threading
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
@@ -14,8 +15,9 @@ CORS(app)
 API_VERSION = "1.0.0"
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
 
-# In-memory document storage (for demonstration purposes)
+# In-memory document storage with thread-safe access
 documents = {}
+documents_lock = threading.Lock()
 
 
 @app.route("/health", methods=["GET"])
@@ -74,9 +76,10 @@ def documents_endpoint():
     List or create LaTeX documents
     """
     if request.method == "GET":
-        return jsonify({
-            "documents": list(documents.values())
-        })
+        with documents_lock:
+            return jsonify({
+                "documents": list(documents.values())
+            })
     
     # POST - Create new document
     data = request.get_json(silent=True)
@@ -91,13 +94,13 @@ def documents_endpoint():
     content = data.get("content", "")
     
     doc_id = str(uuid.uuid4())
-    documents[doc_id] = {
-        "id": doc_id,
-        "title": title,
-        "content": content
-    }
-    
-    return jsonify(documents[doc_id]), 201
+    with documents_lock:
+        documents[doc_id] = {
+            "id": doc_id,
+            "title": title,
+            "content": content
+        }
+        return jsonify(documents[doc_id]), 201
 
 
 @app.route("/api/v1/documents/<doc_id>", methods=["GET", "PUT", "DELETE"])
@@ -105,27 +108,28 @@ def document_operations(doc_id):
     """
     Operations on a specific document by ID
     """
-    if doc_id not in documents:
-        return jsonify({"error": "Document not found"}), 404
-    
-    if request.method == "GET":
-        return jsonify(documents[doc_id])
-    
-    if request.method == "PUT":
-        data = request.get_json(silent=True)
-        if not data:
-            return jsonify({"error": "Request body must be JSON"}), 400
+    with documents_lock:
+        if doc_id not in documents:
+            return jsonify({"error": "Document not found"}), 404
         
-        if "title" in data:
-            documents[doc_id]["title"] = data["title"]
-        if "content" in data:
-            documents[doc_id]["content"] = data["content"]
+        if request.method == "GET":
+            return jsonify(documents[doc_id])
         
-        return jsonify(documents[doc_id])
-    
-    # DELETE
-    del documents[doc_id]
-    return jsonify({"message": "Document deleted"}), 200
+        if request.method == "PUT":
+            data = request.get_json(silent=True)
+            if not data:
+                return jsonify({"error": "Request body must be JSON"}), 400
+            
+            if "title" in data:
+                documents[doc_id]["title"] = data["title"]
+            if "content" in data:
+                documents[doc_id]["content"] = data["content"]
+            
+            return jsonify(documents[doc_id])
+        
+        # DELETE - returns 204 No Content per REST conventions
+        del documents[doc_id]
+        return "", 204
 
 
 @app.errorhandler(404)
