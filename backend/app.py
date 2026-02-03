@@ -91,7 +91,7 @@ def documents_endpoint():
         return jsonify({"error": "Missing 'content' field in request body"}), 400
     
     title = data.get("title", "Untitled")
-    content = data.get("content", "")
+    content = data["content"]
     
     doc_id = str(uuid.uuid4())
     with documents_lock:
@@ -108,15 +108,11 @@ def document_operations(doc_id):
     """
     Operations on a specific document by ID
     """
-    # Check existence with minimal lock
-    with documents_lock:
-        if doc_id not in documents:
-            return jsonify({"error": "Document not found"}), 404
-        
-        if request.method == "GET":
-            doc = documents[doc_id].copy()
-    
     if request.method == "GET":
+        with documents_lock:
+            if doc_id not in documents:
+                return jsonify({"error": "Document not found"}), 404
+            doc = documents[doc_id].copy()
         return jsonify(doc)
     
     if request.method == "PUT":
@@ -135,7 +131,6 @@ def document_operations(doc_id):
             if "content" in data:
                 documents[doc_id]["content"] = data["content"]
             doc = documents[doc_id].copy()
-        
         return jsonify(doc)
     
     # DELETE - returns 204 No Content per REST conventions
