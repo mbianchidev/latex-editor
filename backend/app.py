@@ -3,6 +3,7 @@ LaTeX Editor Backend API
 Provides health check and future API endpoints for LaTeX compilation
 """
 import os
+import uuid
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
@@ -12,6 +13,9 @@ CORS(app)
 # Configuration
 API_VERSION = "1.0.0"
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
+
+# In-memory document storage (for demonstration purposes)
+documents = {}
 
 
 @app.route("/health", methods=["GET"])
@@ -32,7 +36,12 @@ def api_status():
         "endpoints": [
             {"path": "/health", "method": "GET", "description": "Health check"},
             {"path": "/api/v1/status", "method": "GET", "description": "API status"},
-            {"path": "/api/v1/compile", "method": "POST", "description": "Compile LaTeX (future)"}
+            {"path": "/api/v1/compile", "method": "POST", "description": "Compile LaTeX (future)"},
+            {"path": "/api/v1/documents", "method": "GET", "description": "List all documents"},
+            {"path": "/api/v1/documents", "method": "POST", "description": "Create a document"},
+            {"path": "/api/v1/documents/:id", "method": "GET", "description": "Get a document"},
+            {"path": "/api/v1/documents/:id", "method": "PUT", "description": "Update a document"},
+            {"path": "/api/v1/documents/:id", "method": "DELETE", "description": "Delete a document"}
         ]
     })
 
@@ -57,6 +66,66 @@ def compile_latex():
         "message": "Server-side compilation is planned for future releases. Currently using client-side compilation.",
         "input_length": len(latex_content)
     })
+
+
+@app.route("/api/v1/documents", methods=["GET", "POST"])
+def documents_endpoint():
+    """
+    List or create LaTeX documents
+    """
+    if request.method == "GET":
+        return jsonify({
+            "documents": list(documents.values())
+        })
+    
+    # POST - Create new document
+    data = request.get_json(silent=True)
+    
+    if not data:
+        return jsonify({"error": "Request body must be JSON"}), 400
+    
+    if "content" not in data:
+        return jsonify({"error": "Missing 'content' field in request body"}), 400
+    
+    title = data.get("title", "Untitled")
+    content = data.get("content", "")
+    
+    doc_id = str(uuid.uuid4())
+    documents[doc_id] = {
+        "id": doc_id,
+        "title": title,
+        "content": content
+    }
+    
+    return jsonify(documents[doc_id]), 201
+
+
+@app.route("/api/v1/documents/<doc_id>", methods=["GET", "PUT", "DELETE"])
+def document_operations(doc_id):
+    """
+    Operations on a specific document by ID
+    """
+    if doc_id not in documents:
+        return jsonify({"error": "Document not found"}), 404
+    
+    if request.method == "GET":
+        return jsonify(documents[doc_id])
+    
+    if request.method == "PUT":
+        data = request.get_json(silent=True)
+        if not data:
+            return jsonify({"error": "Request body must be JSON"}), 400
+        
+        if "title" in data:
+            documents[doc_id]["title"] = data["title"]
+        if "content" in data:
+            documents[doc_id]["content"] = data["content"]
+        
+        return jsonify(documents[doc_id])
+    
+    # DELETE
+    del documents[doc_id]
+    return jsonify({"message": "Document deleted"}), 200
 
 
 @app.errorhandler(404)
