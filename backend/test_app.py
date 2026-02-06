@@ -116,6 +116,24 @@ class TestDocumentsEndpoint:
         data = response.get_json()
         assert "error" in data
     
+    def test_create_document_rejects_invalid_json(self, client):
+        """POST /api/v1/documents should reject invalid JSON"""
+        response = client.post("/api/v1/documents", 
+                               data="not valid json",
+                               content_type="application/json")
+        assert response.status_code == 400
+        data = response.get_json()
+        assert "error" in data
+        assert "JSON" in data["error"]
+    
+    def test_create_document_rejects_empty_json_object(self, client):
+        """POST /api/v1/documents should reject empty JSON object"""
+        response = client.post("/api/v1/documents", json={})
+        assert response.status_code == 400
+        data = response.get_json()
+        assert "error" in data
+        assert "empty" in data["error"]
+    
     def test_list_documents_returns_200(self, client):
         """GET /api/v1/documents should return 200 with list of documents"""
         response = client.get("/api/v1/documents")
@@ -185,6 +203,23 @@ class TestDocumentsEndpoint:
         
         # Try to update with empty body
         response = client.put(f"/api/v1/documents/{doc_id}", json={})
+        assert response.status_code == 400
+        data = response.get_json()
+        assert "error" in data
+    
+    def test_update_document_rejects_invalid_json(self, client):
+        """PUT /api/v1/documents/:id should reject invalid JSON"""
+        # First create a document
+        create_response = client.post("/api/v1/documents", json={
+            "title": "Original Title",
+            "content": "Original Content"
+        })
+        doc_id = create_response.get_json()["id"]
+        
+        # Try to update with invalid JSON
+        response = client.put(f"/api/v1/documents/{doc_id}", 
+                              data="not valid json",
+                              content_type="application/json")
         assert response.status_code == 400
         data = response.get_json()
         assert "error" in data

@@ -77,15 +77,17 @@ def documents_endpoint():
     """
     if request.method == "GET":
         with documents_lock:
-            return jsonify({
-                "documents": list(documents.values())
-            })
+            docs_list = list(documents.values())
+        return jsonify({"documents": docs_list})
     
     # POST - Create new document
     data = request.get_json(silent=True)
     
+    if data is None:
+        return jsonify({"error": "Request body must be valid JSON"}), 400
+    
     if not data:
-        return jsonify({"error": "Request body must be JSON"}), 400
+        return jsonify({"error": "Request body cannot be empty"}), 400
     
     if "content" not in data:
         return jsonify({"error": "Missing 'content' field in request body"}), 400
@@ -100,7 +102,8 @@ def documents_endpoint():
             "title": title,
             "content": content
         }
-        return jsonify(documents[doc_id]), 201
+        doc = documents[doc_id].copy()
+    return jsonify(doc), 201
 
 
 @app.route("/api/v1/documents/<doc_id>", methods=["GET", "PUT", "DELETE"])
