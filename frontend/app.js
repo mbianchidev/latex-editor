@@ -7,6 +7,9 @@
 // CONFIGURATION & STATE
 // ============================================
 
+// Debug mode - set to true to enable verbose logging
+const DEBUG_MODE = false;
+
 // ============================================
 // CONFIGURATION & STATE
 // ============================================
@@ -137,6 +140,9 @@ const elements = {
   previewContainer: document.getElementById('previewContainer'),
   compileBtn: document.getElementById('compileBtn'),
   newDocBtn: document.getElementById('newDoc'),
+  newDropdown: document.getElementById('newDropdown'),
+  newDocItem: document.getElementById('newDocItem'),
+  newProjectItem: document.getElementById('newProjectItem'),
   downloadPdfBtn: document.getElementById('downloadPdf'),
   downloadTexBtn: document.getElementById('downloadTex'),
   uploadZipBtn: document.getElementById('uploadZip'),
@@ -163,7 +169,9 @@ const elements = {
   toggleFileTreeBtn: document.getElementById('toggleFileTree'),
   closeFileTreeBtn: document.getElementById('closeFileTree'),
   cleanProjectBtn: document.getElementById('cleanProjectBtn'),
-  currentFileName: document.getElementById('currentFileName')
+  currentFileName: document.getElementById('currentFileName'),
+  newFileBtn: document.getElementById('newFileBtn'),
+  newFolderBtn: document.getElementById('newFolderBtn')
 };
 
 // ============================================
@@ -234,8 +242,38 @@ function initializeEventListeners() {
   // Compile button
   elements.compileBtn.addEventListener('click', compile);
   
-  // New document
-  elements.newDocBtn.addEventListener('click', newDocument);
+  // New document/project dropdown
+  if (elements.newDocBtn && elements.newDropdown) {
+    elements.newDocBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      elements.newDropdown.classList.toggle('open');
+    });
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (elements.newDropdown && !elements.newDropdown.contains(e.target)) {
+        elements.newDropdown.classList.remove('open');
+      }
+    });
+    
+    // New document item
+    if (elements.newDocItem) {
+      elements.newDocItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        elements.newDropdown.classList.remove('open');
+        newDocument();
+      });
+    }
+    
+    // New project item
+    if (elements.newProjectItem) {
+      elements.newProjectItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        elements.newDropdown.classList.remove('open');
+        newProject();
+      });
+    }
+  }
   
   // ZIP upload
   elements.uploadZipBtn.addEventListener('click', () => elements.zipFileInput.click());
@@ -254,6 +292,32 @@ function initializeEventListeners() {
   elements.toggleFileTreeBtn.addEventListener('click', toggleFileTree);
   elements.closeFileTreeBtn.addEventListener('click', () => toggleFileTree(false));
   elements.cleanProjectBtn.addEventListener('click', cleanCurrentProject);
+  
+  // New file/folder buttons in file tree header
+  if (elements.newFileBtn) {
+    elements.newFileBtn.addEventListener('click', () => {
+      // If not in project mode, create a new project first
+      if (!state.projectMode) {
+        if (confirm('Create a new project to add files? Unsaved changes to the current document will be lost.')) {
+          newProject();
+        }
+        return;
+      }
+      addNewFile('');
+    });
+  }
+  if (elements.newFolderBtn) {
+    elements.newFolderBtn.addEventListener('click', () => {
+      // If not in project mode, create a new project first
+      if (!state.projectMode) {
+        if (confirm('Create a new project to add folders? Unsaved changes to the current document will be lost.')) {
+          newProject();
+        }
+        return;
+      }
+      addNewFolder('');
+    });
+  }
   
   // Toast close buttons
   elements.closeError.addEventListener('click', () => hideToast('error'));
@@ -389,7 +453,7 @@ function convertLatexToHTML(latex) {
       for (const ext of extensions) {
         const imgPath = filename + ext;
         const imgData = state.projectFiles[imgPath];
-        if (imgData && typeof imgData === 'object' && imgData.isBinary) {
+        if (isBinaryContent(imgData)) {
           // Determine mime type
           const actualExt = imgPath.split('.').pop().toLowerCase();
           const mimeTypes = {
@@ -765,8 +829,29 @@ function newDocument() {
     return;
   }
   
+  // Reset project state
+  state.projectMode = false;
+  state.projectFiles = {};
+  state.currentFile = null;
+  state.mainFile = null;
+  
   state.currentLatex = DEFAULT_TEMPLATE;
   elements.editor.value = DEFAULT_TEMPLATE;
+  elements.editor.readOnly = false;
+  elements.currentFileName.textContent = 'LaTeX Source';
+  
+  // Hide file tree and download ZIP button
+  elements.fileTree.classList.remove('visible');
+  elements.toggleFileTreeBtn.style.display = 'none';
+  elements.downloadZipBtn.style.display = 'none';
+  
+  // Clear project from localStorage
+  try {
+    localStorage.removeItem('latexEditor_project');
+    localStorage.removeItem('latexEditor_projectMode');
+  } catch (error) {
+    console.error('Failed to clear project from localStorage:', error);
+  }
   
   saveToLocalStorage();
   
@@ -774,34 +859,273 @@ function newDocument() {
   compile(true);
 }
 
+/**
+ * Create a new multi-file project from scratch
+ */
+function newProject() {
+  const projectName = prompt('Enter project name:', 'my-project');
+  if (!projectName) return;
+  
+  if (state.projectMode && Object.keys(state.projectFiles).length > 0 &&
+      !confirm('Create new project? Current project will be lost.')) {
+    return;
+  }
+  
+  // Create basic project structure
+  // Convert project name to title case and escape LaTeX special characters
+  const projectTitle = escapeLatex(
+    projectName
+      .replace(/-/g, ' ')
+      .replace(/_/g, ' ')
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ')
+  );
+  
+  const mainContent = `\\documentclass{article}
+\\usepackage[utf8]{inputenc}
+\\usepackage{amsmath}
+\\usepackage{graphicx}
+
+\\title{${projectTitle}}
+\\author{Your Name}
+\\date{\\today}
+
+\\begin{document}
+
+\\maketitle
+
+\\input{sections/introduction}
+
+\\end{document}
+`;
+
+  const introContent = `\\section{Introduction}
+
+This is your new LaTeX project. Edit this file or create new sections.
+
+\\subsection{Getting Started}
+
+\\begin{itemize}
+    \\item Add more sections using \\texttt{\\\\input{sections/filename}}
+    \\item Upload images to an \\texttt{images/} folder
+    \\item Add custom fonts to a \\texttt{fonts/} folder
+\\end{itemize}
+`;
+
+  // Initialize project files
+  state.projectFiles = {
+    'main.tex': mainContent,
+    'sections/introduction.tex': introContent
+  };
+  
+  state.mainFile = 'main.tex';
+  state.currentFile = 'main.tex';
+  state.projectMode = true;
+  state.currentLatex = mainContent;
+  
+  // Update UI
+  elements.editor.value = mainContent;
+  elements.editor.readOnly = false;
+  elements.currentFileName.textContent = 'main.tex';
+  
+  // Build and show file tree
+  buildFileTree(state.projectFiles);
+  elements.fileTree.classList.add('visible');
+  elements.toggleFileTreeBtn.style.display = 'inline-block';
+  elements.downloadZipBtn.style.display = 'inline-block';
+  
+  // Save project to localStorage
+  saveProjectToLocalStorage();
+  
+  showSuccessToast(`Created project: ${projectName}`);
+  
+  // Compile the new project
+  compile(true);
+}
+
 // ============================================
 // LOCAL STORAGE
 // ============================================
 
+/**
+ * Encode string for localStorage storage (base64 + URI encoding)
+ * Handles unicode characters safely for localStorage
+ */
+function encodeForStorage(str) {
+  if (!str) return '';
+  
+  try {
+    // Use base64 encoding with URI encoding for safe storage
+    // This handles unicode characters properly
+    return btoa(encodeURIComponent(str));
+  } catch (error) {
+    console.error('Encoding failed:', error);
+    return str;
+  }
+}
+
+/**
+ * Decode string from localStorage storage
+ */
+function decodeFromStorage(str) {
+  if (!str) return '';
+  
+  try {
+    return decodeURIComponent(atob(str));
+  } catch (error) {
+    console.error('Decoding failed:', error);
+    return str;
+  }
+}
+
+/**
+ * Check if content represents a binary file
+ */
+function isBinaryContent(content) {
+  return content && typeof content === 'object' && content.isBinary;
+}
+
+/**
+ * Escape LaTeX special characters in a string
+ * @param {string} str - The string to escape
+ * @returns {string} - The escaped string safe for use in LaTeX
+ */
+function escapeLatex(str) {
+  if (!str) return '';
+  return str
+    .replace(/\\/g, '\\textbackslash{}')
+    .replace(/[&%$#_{}]/g, match => '\\' + match)
+    .replace(/\^/g, '\\textasciicircum{}')
+    .replace(/~/g, '\\textasciitilde{}');
+}
+
+/**
+ * Save current state to localStorage
+ */
 function saveToLocalStorage() {
   try {
     localStorage.setItem('latexEditor_content', state.currentLatex);
     localStorage.setItem('latexEditor_zoom', state.zoom.toString());
+    
+    // If in project mode, also save the project
+    if (state.projectMode) {
+      saveProjectToLocalStorage();
+    }
   } catch (error) {
     console.error('Failed to save to localStorage:', error);
   }
 }
 
+/**
+ * Save project to localStorage with compression
+ */
+function saveProjectToLocalStorage() {
+  if (!state.projectMode) return;
+  
+  try {
+    // Save current file content first
+    if (state.currentFile && state.projectFiles[state.currentFile] !== undefined) {
+      const currentContent = state.projectFiles[state.currentFile];
+      // Only update if it's a text file (not binary)
+      if (!isBinaryContent(currentContent)) {
+        state.projectFiles[state.currentFile] = state.currentLatex;
+      }
+    }
+    
+    const projectData = {
+      files: state.projectFiles,
+      mainFile: state.mainFile,
+      currentFile: state.currentFile
+    };
+    
+    // Encode and save
+    const encoded = encodeForStorage(JSON.stringify(projectData));
+    localStorage.setItem('latexEditor_project', encoded);
+    localStorage.setItem('latexEditor_projectMode', 'true');
+  } catch (error) {
+    console.error('Failed to save project to localStorage:', error);
+    // If storage quota exceeded, show a warning
+    if (error.name === 'QuotaExceededError') {
+      showErrorToast('Storage quota exceeded. Consider downloading your project as ZIP.');
+    }
+  }
+}
+
+/**
+ * Load from localStorage
+ */
 function loadFromLocalStorage() {
   try {
-    const savedContent = localStorage.getItem('latexEditor_content');
     const savedZoom = localStorage.getItem('latexEditor_zoom');
-    
-    if (savedContent && savedContent !== DEFAULT_TEMPLATE) {
-      state.currentLatex = savedContent;
-      elements.editor.value = savedContent;
-    }
+    const isProjectMode = localStorage.getItem('latexEditor_projectMode') === 'true';
     
     if (savedZoom) {
       setZoom(parseFloat(savedZoom));
     }
+    
+    // Try to load project first
+    if (isProjectMode) {
+      const success = loadProjectFromLocalStorage();
+      if (success) return;
+    }
+    
+    // Fall back to simple document
+    const savedContent = localStorage.getItem('latexEditor_content');
+    if (savedContent && savedContent !== DEFAULT_TEMPLATE) {
+      state.currentLatex = savedContent;
+      elements.editor.value = savedContent;
+    }
   } catch (error) {
     console.error('Failed to load from localStorage:', error);
+  }
+}
+
+/**
+ * Load project from localStorage
+ */
+function loadProjectFromLocalStorage() {
+  try {
+    const encoded = localStorage.getItem('latexEditor_project');
+    if (!encoded) return false;
+    
+    const projectDataStr = decodeFromStorage(encoded);
+    const projectData = JSON.parse(projectDataStr);
+    
+    if (!projectData.files || Object.keys(projectData.files).length === 0) {
+      return false;
+    }
+    
+    // Restore project state
+    state.projectFiles = projectData.files;
+    state.mainFile = projectData.mainFile;
+    state.currentFile = projectData.currentFile || projectData.mainFile;
+    state.projectMode = true;
+    
+    // Load current file content
+    const fileContent = state.projectFiles[state.currentFile];
+    if (isBinaryContent(fileContent)) {
+      state.currentLatex = `[Binary file: ${state.currentFile}]`;
+      elements.editor.readOnly = true;
+    } else {
+      state.currentLatex = fileContent || '';
+      elements.editor.readOnly = false;
+    }
+    elements.editor.value = state.currentLatex;
+    elements.currentFileName.textContent = state.currentFile ? state.currentFile.split('/').pop() : 'LaTeX Source';
+    
+    // Build and show file tree
+    buildFileTree(state.projectFiles);
+    elements.fileTree.classList.add('visible');
+    elements.toggleFileTreeBtn.style.display = 'inline-block';
+    elements.downloadZipBtn.style.display = 'inline-block';
+    
+    showSuccessToast('Project restored from last session');
+    
+    return true;
+  } catch (error) {
+    console.error('Failed to load project from localStorage:', error);
+    return false;
   }
 }
 
@@ -920,7 +1244,7 @@ function isMacOSJunk(filePath) {
   
   // Check if path contains __macosx anywhere
   if (lowerPath.includes('__macosx')) {
-    console.log('[FILTER] Blocked __MACOSX path:', filePath);
+    if (DEBUG_MODE) console.log('[FILTER] Blocked __MACOSX path:', filePath);
     return true;
   }
   
@@ -932,20 +1256,20 @@ function isMacOSJunk(filePath) {
     const lowerSegment = segment.toLowerCase();
     for (const pattern of MACOS_JUNK_PATTERNS) {
       if (lowerSegment === pattern.toLowerCase()) {
-        console.log('[FILTER] Blocked junk pattern:', filePath, '(matched:', pattern, ')');
+        if (DEBUG_MODE) console.log('[FILTER] Blocked junk pattern:', filePath, '(matched:', pattern, ')');
         return true;
       }
     }
     
     // Check for resource forks (files starting with ._)
     if (segment.startsWith('._')) {
-      console.log('[FILTER] Blocked resource fork:', filePath);
+      if (DEBUG_MODE) console.log('[FILTER] Blocked resource fork:', filePath);
       return true;
     }
     
     // Check for hidden files (except allowed ones)
     if (segment.startsWith('.') && segment !== '.gitignore' && segment !== '.github') {
-      console.log('[FILTER] Blocked hidden file:', filePath);
+      if (DEBUG_MODE) console.log('[FILTER] Blocked hidden file:', filePath);
       return true;
     }
   }
@@ -969,14 +1293,14 @@ function cleanProjectFiles(files) {
   
   for (const [path, content] of Object.entries(files)) {
     if (isMacOSJunk(path)) {
-      console.log('[CLEAN] Removing junk file:', path);
+      if (DEBUG_MODE) console.log('[CLEAN] Removing junk file:', path);
       removedCount++;
       continue;
     }
     cleanedFiles[path] = content;
   }
   
-  if (removedCount > 0) {
+  if (removedCount > 0 && DEBUG_MODE) {
     console.log(`[CLEAN] Removed ${removedCount} junk files from project`);
   }
   
@@ -1039,14 +1363,16 @@ async function handleZipUpload(event) {
     let mainTexFile = null;
     let skippedCount = 0;
     
-    console.log('[ZIP] Starting extraction...');
-    console.log('[ZIP] Total entries in ZIP:', Object.keys(zip.files).length);
+    if (DEBUG_MODE) {
+      console.log('[ZIP] Starting extraction...');
+      console.log('[ZIP] Total entries in ZIP:', Object.keys(zip.files).length);
+    }
     
     // Extract all files
     for (const [path, zipEntry] of Object.entries(zip.files)) {
       // Skip directories
       if (zipEntry.dir) {
-        console.log('[ZIP] Skipping directory entry:', path);
+        if (DEBUG_MODE) console.log('[ZIP] Skipping directory entry:', path);
         continue;
       }
       
@@ -1081,19 +1407,23 @@ async function handleZipUpload(event) {
       }
     }
     
-    console.log('[ZIP] Raw files extracted:', Object.keys(rawFiles).length);
-    console.log('[ZIP] Skipped during extraction:', skippedCount);
+    if (DEBUG_MODE) {
+      console.log('[ZIP] Raw files extracted:', Object.keys(rawFiles).length);
+      console.log('[ZIP] Skipped during extraction:', skippedCount);
+    }
     
     // Double-clean the files to ensure no junk slipped through
     const files = cleanProjectFiles(rawFiles);
     const extraCleaned = Object.keys(rawFiles).length - Object.keys(files).length;
     if (extraCleaned > 0) {
-      console.log('[ZIP] Extra files cleaned:', extraCleaned);
+      if (DEBUG_MODE) console.log('[ZIP] Extra files cleaned:', extraCleaned);
       skippedCount += extraCleaned;
     }
     
-    console.log('[ZIP] Final clean files:', Object.keys(files).length);
-    console.log('[ZIP] File list:', Object.keys(files));
+    if (DEBUG_MODE) {
+      console.log('[ZIP] Final clean files:', Object.keys(files).length);
+      console.log('[ZIP] File list:', Object.keys(files));
+    }
     
     if (Object.keys(files).length === 0) {
       showErrorToast('ZIP file is empty or contains only system files');
@@ -1144,9 +1474,12 @@ async function handleZipUpload(event) {
     elements.toggleFileTreeBtn.style.display = 'inline-block';
     elements.downloadZipBtn.style.display = 'inline-block';
     
-    if (skippedCount > 0) {
+    if (skippedCount > 0 && DEBUG_MODE) {
       console.log(`Filtered out ${skippedCount} macOS metadata files`);
     }
+    
+    // Auto-save project to localStorage after loading
+    saveProjectToLocalStorage();
     
     showSuccessToast(`Loaded ${Object.keys(files).length} files`);
     
@@ -1323,12 +1656,12 @@ function openFile(path, itemElement) {
   if (fileContent === undefined) return;
   
   // Check if this is a binary file
-  const isBinary = fileContent && typeof fileContent === 'object' && fileContent.isBinary;
+  const isBinary = isBinaryContent(fileContent);
   
   // Save current file content (only for text files)
   if (state.currentFile && state.projectFiles[state.currentFile] !== undefined) {
     const currentContent = state.projectFiles[state.currentFile];
-    if (!(currentContent && typeof currentContent === 'object' && currentContent.isBinary)) {
+    if (!isBinaryContent(currentContent)) {
       state.projectFiles[state.currentFile] = state.currentLatex;
     }
   }
@@ -1407,7 +1740,7 @@ async function downloadProjectZip() {
     
     // Add all files to ZIP, handling binary files properly
     for (const [path, content] of Object.entries(state.projectFiles)) {
-      if (content && typeof content === 'object' && content.isBinary) {
+      if (isBinaryContent(content)) {
         // Binary file stored as base64
         zip.file(path, content.content, { base64: true });
       } else {
@@ -1621,6 +1954,9 @@ function addNewFile(parentPath) {
   // Open the new file
   openFile(newPath, null);
   
+  // Auto-save project
+  saveProjectToLocalStorage();
+  
   showSuccessToast(`Created ${filename}`);
 }
 
@@ -1643,6 +1979,9 @@ function addNewFolder(parentPath) {
   
   // Rebuild file tree
   buildFileTree(state.projectFiles);
+  
+  // Auto-save project
+  saveProjectToLocalStorage();
   
   showSuccessToast(`Created folder ${foldername}`);
 }
@@ -1682,6 +2021,9 @@ function renameFile(oldPath) {
   // Rebuild file tree
   buildFileTree(state.projectFiles);
   
+  // Auto-save project
+  saveProjectToLocalStorage();
+  
   showSuccessToast(`Renamed to ${newName}`);
 }
 
@@ -1719,6 +2061,9 @@ function renameFolder(oldPath) {
   // Rebuild file tree
   buildFileTree(state.projectFiles);
   
+  // Auto-save project
+  saveProjectToLocalStorage();
+  
   showSuccessToast(`Renamed folder to ${newName}`);
 }
 
@@ -1746,6 +2091,9 @@ function deleteFile(path) {
   
   // Rebuild file tree
   buildFileTree(state.projectFiles);
+  
+  // Auto-save project
+  saveProjectToLocalStorage();
   
   showSuccessToast(`Deleted ${filename}`);
 }
@@ -1782,6 +2130,9 @@ function deleteFolder(path) {
   // Rebuild file tree
   buildFileTree(state.projectFiles);
   
+  // Auto-save project
+  saveProjectToLocalStorage();
+  
   showSuccessToast(`Deleted folder ${foldername}`);
 }
 
@@ -1794,6 +2145,9 @@ function setAsMainFile(path) {
   
   // Rebuild file tree to update visual indication
   buildFileTree(state.projectFiles);
+  
+  // Auto-save project
+  saveProjectToLocalStorage();
 }
 
 function hideToast(type) {
