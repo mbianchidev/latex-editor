@@ -7,6 +7,9 @@
 // CONFIGURATION & STATE
 // ============================================
 
+// Debug mode - set to true to enable verbose logging
+const DEBUG_MODE = false;
+
 // ============================================
 // CONFIGURATION & STATE
 // ============================================
@@ -138,7 +141,6 @@ const elements = {
   compileBtn: document.getElementById('compileBtn'),
   newDocBtn: document.getElementById('newDoc'),
   newDropdown: document.getElementById('newDropdown'),
-  newDropdownMenu: document.getElementById('newDropdownMenu'),
   newDocItem: document.getElementById('newDocItem'),
   newProjectItem: document.getElementById('newProjectItem'),
   downloadPdfBtn: document.getElementById('downloadPdf'),
@@ -870,13 +872,15 @@ function newProject() {
   }
   
   // Create basic project structure
-  // Convert project name to title case
-  const projectTitle = projectName
-    .replace(/-/g, ' ')
-    .replace(/_/g, ' ')
-    .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(' ');
+  // Convert project name to title case and escape LaTeX special characters
+  const projectTitle = escapeLatex(
+    projectName
+      .replace(/-/g, ' ')
+      .replace(/_/g, ' ')
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ')
+  );
   
   const mainContent = `\\documentclass{article}
 \\usepackage[utf8]{inputenc}
@@ -983,6 +987,20 @@ function isBinaryContent(content) {
 }
 
 /**
+ * Escape LaTeX special characters in a string
+ * @param {string} str - The string to escape
+ * @returns {string} - The escaped string safe for use in LaTeX
+ */
+function escapeLatex(str) {
+  if (!str) return '';
+  return str
+    .replace(/\\/g, '\\textbackslash{}')
+    .replace(/[&%$#_{}]/g, match => '\\' + match)
+    .replace(/\^/g, '\\textasciicircum{}')
+    .replace(/~/g, '\\textasciitilde{}');
+}
+
+/**
  * Save current state to localStorage
  */
 function saveToLocalStorage() {
@@ -1025,8 +1043,6 @@ function saveProjectToLocalStorage() {
     const encoded = encodeForStorage(JSON.stringify(projectData));
     localStorage.setItem('latexEditor_project', encoded);
     localStorage.setItem('latexEditor_projectMode', 'true');
-    
-    console.log('Project saved to localStorage');
   } catch (error) {
     console.error('Failed to save project to localStorage:', error);
     // If storage quota exceeded, show a warning
@@ -1104,7 +1120,6 @@ function loadProjectFromLocalStorage() {
     elements.toggleFileTreeBtn.style.display = 'inline-block';
     elements.downloadZipBtn.style.display = 'inline-block';
     
-    console.log('Project loaded from localStorage');
     showSuccessToast('Project restored from last session');
     
     return true;
@@ -1229,7 +1244,7 @@ function isMacOSJunk(filePath) {
   
   // Check if path contains __macosx anywhere
   if (lowerPath.includes('__macosx')) {
-    console.log('[FILTER] Blocked __MACOSX path:', filePath);
+    if (DEBUG_MODE) console.log('[FILTER] Blocked __MACOSX path:', filePath);
     return true;
   }
   
@@ -1241,20 +1256,20 @@ function isMacOSJunk(filePath) {
     const lowerSegment = segment.toLowerCase();
     for (const pattern of MACOS_JUNK_PATTERNS) {
       if (lowerSegment === pattern.toLowerCase()) {
-        console.log('[FILTER] Blocked junk pattern:', filePath, '(matched:', pattern, ')');
+        if (DEBUG_MODE) console.log('[FILTER] Blocked junk pattern:', filePath, '(matched:', pattern, ')');
         return true;
       }
     }
     
     // Check for resource forks (files starting with ._)
     if (segment.startsWith('._')) {
-      console.log('[FILTER] Blocked resource fork:', filePath);
+      if (DEBUG_MODE) console.log('[FILTER] Blocked resource fork:', filePath);
       return true;
     }
     
     // Check for hidden files (except allowed ones)
     if (segment.startsWith('.') && segment !== '.gitignore' && segment !== '.github') {
-      console.log('[FILTER] Blocked hidden file:', filePath);
+      if (DEBUG_MODE) console.log('[FILTER] Blocked hidden file:', filePath);
       return true;
     }
   }
@@ -1278,14 +1293,14 @@ function cleanProjectFiles(files) {
   
   for (const [path, content] of Object.entries(files)) {
     if (isMacOSJunk(path)) {
-      console.log('[CLEAN] Removing junk file:', path);
+      if (DEBUG_MODE) console.log('[CLEAN] Removing junk file:', path);
       removedCount++;
       continue;
     }
     cleanedFiles[path] = content;
   }
   
-  if (removedCount > 0) {
+  if (removedCount > 0 && DEBUG_MODE) {
     console.log(`[CLEAN] Removed ${removedCount} junk files from project`);
   }
   
@@ -1348,14 +1363,16 @@ async function handleZipUpload(event) {
     let mainTexFile = null;
     let skippedCount = 0;
     
-    console.log('[ZIP] Starting extraction...');
-    console.log('[ZIP] Total entries in ZIP:', Object.keys(zip.files).length);
+    if (DEBUG_MODE) {
+      console.log('[ZIP] Starting extraction...');
+      console.log('[ZIP] Total entries in ZIP:', Object.keys(zip.files).length);
+    }
     
     // Extract all files
     for (const [path, zipEntry] of Object.entries(zip.files)) {
       // Skip directories
       if (zipEntry.dir) {
-        console.log('[ZIP] Skipping directory entry:', path);
+        if (DEBUG_MODE) console.log('[ZIP] Skipping directory entry:', path);
         continue;
       }
       
@@ -1390,19 +1407,23 @@ async function handleZipUpload(event) {
       }
     }
     
-    console.log('[ZIP] Raw files extracted:', Object.keys(rawFiles).length);
-    console.log('[ZIP] Skipped during extraction:', skippedCount);
+    if (DEBUG_MODE) {
+      console.log('[ZIP] Raw files extracted:', Object.keys(rawFiles).length);
+      console.log('[ZIP] Skipped during extraction:', skippedCount);
+    }
     
     // Double-clean the files to ensure no junk slipped through
     const files = cleanProjectFiles(rawFiles);
     const extraCleaned = Object.keys(rawFiles).length - Object.keys(files).length;
     if (extraCleaned > 0) {
-      console.log('[ZIP] Extra files cleaned:', extraCleaned);
+      if (DEBUG_MODE) console.log('[ZIP] Extra files cleaned:', extraCleaned);
       skippedCount += extraCleaned;
     }
     
-    console.log('[ZIP] Final clean files:', Object.keys(files).length);
-    console.log('[ZIP] File list:', Object.keys(files));
+    if (DEBUG_MODE) {
+      console.log('[ZIP] Final clean files:', Object.keys(files).length);
+      console.log('[ZIP] File list:', Object.keys(files));
+    }
     
     if (Object.keys(files).length === 0) {
       showErrorToast('ZIP file is empty or contains only system files');
@@ -1453,7 +1474,7 @@ async function handleZipUpload(event) {
     elements.toggleFileTreeBtn.style.display = 'inline-block';
     elements.downloadZipBtn.style.display = 'inline-block';
     
-    if (skippedCount > 0) {
+    if (skippedCount > 0 && DEBUG_MODE) {
       console.log(`Filtered out ${skippedCount} macOS metadata files`);
     }
     
