@@ -7,13 +7,38 @@ import uuid
 import threading
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
-CORS(app)
+
+# Trust proxy headers (nginx sits in front)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+# Restrict CORS to same-origin via nginx proxy only
+ALLOWED_ORIGINS = os.environ.get(
+    "CORS_ORIGINS", "http://localhost,http://localhost:80"
+).split(",")
+CORS(app, origins=ALLOWED_ORIGINS)
+
+# Reject request bodies larger than 2 MB
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 
 # Configuration
 API_VERSION = "1.0.0"
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
+MAX_DOCUMENTS = int(os.environ.get("MAX_DOCUMENTS", "100"))
+MAX_CONTENT_LENGTH = int(os.environ.get("MAX_DOC_CONTENT_LENGTH", str(1024 * 1024)))
+MAX_TITLE_LENGTH = 256
+
+# Rate limiter
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per minute"],
+    storage_uri="memory://",
+)
 
 # In-memory document storage with thread-safe access
 documents = {}
@@ -49,6 +74,7 @@ def api_status():
 
 
 @app.route("/api/v1/compile", methods=["POST"])
+@limiter.limit("30 per minute")
 def compile_latex():
     """
     Compile LaTeX endpoint (placeholder for future server-side compilation)
@@ -60,6 +86,9 @@ def compile_latex():
         return jsonify({"error": "Missing 'latex' field in request body"}), 400
     
     latex_content = data.get("latex", "")
+
+    if len(latex_content) > MAX_CONTENT_LENGTH:
+        return jsonify({"error": "LaTeX content exceeds maximum allowed size"}), 413
     
     # For now, return a placeholder response
     # Future: integrate with latexmk or pdflatex for server-side compilation
@@ -71,6 +100,7 @@ def compile_latex():
 
 
 @app.route("/api/v1/documents", methods=["GET", "POST"])
+@limiter.limit("60 per minute")
 def documents_endpoint():
     """
     List or create LaTeX documents
@@ -91,12 +121,24 @@ def documents_endpoint():
     
     if "content" not in data:
         return jsonify({"error": "Missing 'content' field in request body"}), 400
-    
+
     title = data.get("title", "Untitled")
     content = data["content"]
-    
-    doc_id = str(uuid.uuid4())
+
+    if not isinstance(title, str) or not isinstance(content, str):
+        return jsonify({"error": "'title' and 'content' must be strings"}), 400
+
+    if len(title) > MAX_TITLE_LENGTH:
+        return jsonify({"error": f"Title exceeds maximum length of {MAX_TITLE_LENGTH} characters"}), 400
+
+    if len(content) > MAX_CONTENT_LENGTH:
+        return jsonify({"error": "Content exceeds maximum allowed size"}), 413
+
     with documents_lock:
+        if len(documents) >= MAX_DOCUMENTS:
+            return jsonify({"error": f"Maximum document limit ({MAX_DOCUMENTS}) reached"}), 409
+
+        doc_id = str(uuid.uuid4())
         documents[doc_id] = {
             "id": doc_id,
             "title": title,
@@ -125,6 +167,14 @@ def document_operations(doc_id):
         
         if "title" not in data and "content" not in data:
             return jsonify({"error": "At least one of 'title' or 'content' must be provided"}), 400
+
+        if "title" in data:
+            if not isinstance(data["title"], str) or len(data["title"]) > MAX_TITLE_LENGTH:
+                return jsonify({"error": f"Title must be a string of at most {MAX_TITLE_LENGTH} characters"}), 400
+
+        if "content" in data:
+            if not isinstance(data["content"], str) or len(data["content"]) > MAX_CONTENT_LENGTH:
+                return jsonify({"error": "Content exceeds maximum allowed size"}), 413
         
         with documents_lock:
             if doc_id not in documents:
@@ -148,6 +198,18 @@ def document_operations(doc_id):
 def not_found(error):
     """Handle 404 errors"""
     return jsonify({"error": "Endpoint not found"}), 404
+
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    """Handle 413 errors - payload too large"""
+    return jsonify({"error": "Request body too large"}), 413
+
+
+@app.errorhandler(429)
+def rate_limit_exceeded(error):
+    """Handle 429 errors - rate limit exceeded"""
+    return jsonify({"error": "Rate limit exceeded. Please try again later."}), 429
 
 
 @app.errorhandler(500)

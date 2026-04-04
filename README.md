@@ -19,6 +19,12 @@ A free, open source LaTeX editor with real-time preview capabilities. Think Over
 
 ## 🚀 Quick Start
 
+### One-liner (Docker)
+
+```bash
+docker compose up --build -d && echo "Open http://localhost"
+```
+
 ### Using Docker (Recommended)
 
 ```bash
@@ -27,7 +33,7 @@ git clone https://github.com/mbianchidev/latex-editor.git
 cd latex-editor
 
 # Start with Docker Compose
-docker compose up -d
+docker compose up --build -d
 
 # Open http://localhost in your browser
 ```
@@ -124,8 +130,8 @@ Your content here.
 
 - **Frontend**: HTML5, CSS3, Vanilla JavaScript (ES6+)
 - **Libraries**: MathJax 3, jsPDF, html2canvas, JSZip
-- **Backend**: Python/Flask (for health checks only)
-- **Container**: Docker with nginx
+- **Backend**: Python/Flask with rate limiting (flask-limiter)
+- **Container**: Docker with nginx (reverse proxy + CSP headers)
 
 ## 📁 Project Structure
 
@@ -160,6 +166,15 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## 🔒 Security
 
 Found a vulnerability? See [SECURITY.md](SECURITY.md) for reporting guidelines.
+
+### Security Features
+
+- **XSS Prevention**: All user-controlled LaTeX content is HTML-escaped before rendering
+- **Sandboxed Preview**: Preview iframe uses `sandbox="allow-scripts"` — isolated from the parent page
+- **Content Security Policy**: Nginx enforces CSP headers restricting script/style sources
+- **Rate Limiting**: Backend API endpoints are rate-limited via flask-limiter
+- **Input Validation**: Request body size limits, document count caps, filename sanitization
+- **No Direct Backend Exposure**: Backend is only accessible through the nginx reverse proxy
 
 ## 💬 Support
 

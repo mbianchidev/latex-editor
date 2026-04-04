@@ -2,7 +2,7 @@
 Backend API Tests
 """
 import pytest
-from app import app
+from app import app, documents, documents_lock, MAX_DOCUMENTS
 
 
 @pytest.fixture
@@ -10,6 +10,9 @@ def client():
     """Create test client"""
     app.config["TESTING"] = True
     with app.test_client() as client:
+        # Clear documents between tests
+        with documents_lock:
+            documents.clear()
         yield client
 
 
@@ -80,17 +83,6 @@ class TestCompileEndpoint:
         assert response.status_code == 200
         data = response.get_json()
         assert data["status"] == "success"
-
-
-class TestErrorHandling:
-    """Tests for error handling"""
-    
-    def test_404_returns_json(self, client):
-        """404 errors should return JSON"""
-        response = client.get("/nonexistent")
-        assert response.status_code == 404
-        data = response.get_json()
-        assert "error" in data
 
 
 class TestDocumentsEndpoint:
@@ -245,3 +237,100 @@ class TestDocumentsEndpoint:
         """DELETE /api/v1/documents/:id should return 404 for non-existent document"""
         response = client.delete("/api/v1/documents/nonexistent-id")
         assert response.status_code == 404
+
+
+class TestInputValidation:
+    """Tests for input validation and size limits"""
+
+    def test_create_document_rejects_non_string_title(self, client):
+        """POST /api/v1/documents should reject non-string title"""
+        response = client.post("/api/v1/documents", json={
+            "title": 12345,
+            "content": "valid content"
+        })
+        assert response.status_code == 400
+
+    def test_create_document_rejects_non_string_content(self, client):
+        """POST /api/v1/documents should reject non-string content"""
+        response = client.post("/api/v1/documents", json={
+            "title": "valid title",
+            "content": ["not", "a", "string"]
+        })
+        assert response.status_code == 400
+
+    def test_create_document_rejects_oversized_title(self, client):
+        """POST /api/v1/documents should reject titles exceeding max length"""
+        response = client.post("/api/v1/documents", json={
+            "title": "x" * 300,
+            "content": "valid content"
+        })
+        assert response.status_code == 400
+
+    def test_create_document_rejects_oversized_content(self, client):
+        """POST /api/v1/documents should reject content exceeding max size"""
+        response = client.post("/api/v1/documents", json={
+            "title": "Test",
+            "content": "x" * (1024 * 1024 + 1)
+        })
+        assert response.status_code == 413
+
+    def test_document_count_limit(self, client):
+        """POST /api/v1/documents should reject when max documents reached"""
+        # Fill up to the limit
+        with documents_lock:
+            for i in range(MAX_DOCUMENTS):
+                documents[f"doc-{i}"] = {
+                    "id": f"doc-{i}",
+                    "title": f"Doc {i}",
+                    "content": "content"
+                }
+
+        response = client.post("/api/v1/documents", json={
+            "title": "One Too Many",
+            "content": "content"
+        })
+        assert response.status_code == 409
+
+    def test_update_document_rejects_oversized_title(self, client):
+        """PUT /api/v1/documents/:id should reject oversized titles"""
+        create_resp = client.post("/api/v1/documents", json={
+            "title": "Original",
+            "content": "content"
+        })
+        doc_id = create_resp.get_json()["id"]
+
+        response = client.put(f"/api/v1/documents/{doc_id}", json={
+            "title": "x" * 300
+        })
+        assert response.status_code == 400
+
+    def test_update_document_rejects_oversized_content(self, client):
+        """PUT /api/v1/documents/:id should reject oversized content"""
+        create_resp = client.post("/api/v1/documents", json={
+            "title": "Original",
+            "content": "content"
+        })
+        doc_id = create_resp.get_json()["id"]
+
+        response = client.put(f"/api/v1/documents/{doc_id}", json={
+            "content": "x" * (1024 * 1024 + 1)
+        })
+        assert response.status_code == 413
+
+    def test_compile_rejects_oversized_latex(self, client):
+        """POST /api/v1/compile should reject oversized LaTeX content"""
+        response = client.post("/api/v1/compile", json={
+            "latex": "x" * (1024 * 1024 + 1)
+        })
+        assert response.status_code == 413
+
+
+class TestErrorHandlers:
+    """Tests for custom error handlers"""
+
+    def test_404_returns_json(self, client):
+        """404 errors should return JSON"""
+        response = client.get("/nonexistent")
+        assert response.status_code == 404
+        data = response.get_json()
+        assert "error" in data

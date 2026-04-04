@@ -121,6 +121,7 @@ const state = {
   pdfData: null,
   zoom: 1.0,
   isCompiling: false,
+  compileGeneration: 0,
   engine: null,
   lastCompileTime: 0,
   // Multi-file project support
@@ -363,7 +364,16 @@ async function compile(isInitial = false) {
   }
   
   state.isCompiling = true;
-  showLoading('Compiling LaTeX...');
+  state.compileGeneration++;
+  const generation = state.compileGeneration;
+
+  // Delayed loading indicator — only show if compile takes >300ms
+  const loadingTimer = setTimeout(() => {
+    if (state.isCompiling) {
+      showLoading('Compiling LaTeX...');
+    }
+  }, 300);
+
   showStatus('Compiling...', 'info');
   
   const startTime = Date.now();
@@ -386,11 +396,21 @@ async function compile(isInitial = false) {
     // Use a simple LaTeX to HTML converter for demo purposes
     // In production, you would use SwiftLaTeX or similar
     const pdfBlob = await compileLatexToBlob(latexContent);
+
+    // Stale check — a newer compile was triggered while we were working
+    if (generation !== state.compileGeneration) return;
     
     state.pdfData = pdfBlob;
     state.lastCompileTime = Date.now() - startTime;
+
+    // Store the raw HTML for export (export needs unsandboxed DOM access)
+    state.lastHtmlContent = convertLatexToHTML(
+      state.projectMode && state.mainFile
+        ? resolveIncludes(state.projectFiles[state.mainFile], state.mainFile)
+        : state.currentLatex
+    );
     
-    await renderPDF(pdfBlob);
+    await renderPDF(pdfBlob, generation);
     
     showStatus(`Compiled successfully (${state.lastCompileTime}ms)`, 'success');
     showSuccessToast(`Document compiled in ${state.lastCompileTime}ms`);
@@ -400,6 +420,7 @@ async function compile(isInitial = false) {
     showStatus('Compilation failed', 'error');
     showErrorToast(error.message || 'Failed to compile LaTeX document');
   } finally {
+    clearTimeout(loadingTimer);
     state.isCompiling = false;
     hideLoading();
   }
@@ -440,21 +461,19 @@ function convertLatexToHTML(latex) {
   const authorMatch = latex.match(/\\author{([^}]*)}/);
   const dateMatch = latex.match(/\\date{([^}]*)}/);
   
-  const title = titleMatch ? titleMatch[1] : '';
-  const author = authorMatch ? authorMatch[1] : '';
-  const date = dateMatch ? dateMatch[1].replace('\\today', new Date().toLocaleDateString()) : '';
+  const title = titleMatch ? escapeHtml(titleMatch[1]) : '';
+  const author = authorMatch ? escapeHtml(authorMatch[1]) : '';
+  const date = dateMatch ? escapeHtml(dateMatch[1].replace('\\today', new Date().toLocaleDateString())) : '';
   
   // Handle includegraphics - convert to embedded images with base64 data
   content = content.replace(/\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}/g, (match, filename) => {
-    // Try to find the image in project files
+    const safeFilename = escapeHtml(filename);
     if (state.projectMode && state.projectFiles) {
-      // Try exact path first, then with common extensions
       const extensions = ['', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.pdf'];
       for (const ext of extensions) {
         const imgPath = filename + ext;
         const imgData = state.projectFiles[imgPath];
         if (isBinaryContent(imgData)) {
-          // Determine mime type
           const actualExt = imgPath.split('.').pop().toLowerCase();
           const mimeTypes = {
             'png': 'image/png',
@@ -464,25 +483,22 @@ function convertLatexToHTML(latex) {
             'svg': 'image/svg+xml'
           };
           const mimeType = mimeTypes[actualExt] || 'application/octet-stream';
-          return `<img src="data:${mimeType};base64,${imgData.content}" alt="${filename}" style="max-width: 100%; height: auto;">`;
+          return `<img src="data:${escapeHtml(mimeType)};base64,${imgData.content}" alt="${safeFilename}" style="max-width: 100%; height: auto;">`;
         }
       }
     }
-    // Return placeholder if image not found
-    return `<div style="padding: 1em; background: #f0f0f0; border: 1px dashed #ccc; text-align: center; color: #666;">[Image: ${filename}]</div>`;
+    return `<div style="padding: 1em; background: #f0f0f0; border: 1px dashed #ccc; text-align: center; color: #666;">[Image: ${safeFilename}]</div>`;
   });
   
-  // Basic conversions
+  // Basic conversions — escape captures before inserting into HTML tags
   content = content
-    // Sections
-    .replace(/\\section\*?{([^}]*)}/g, '<h2>$1</h2>')
-    .replace(/\\subsection\*?{([^}]*)}/g, '<h3>$1</h3>')
-    .replace(/\\subsubsection\*?{([^}]*)}/g, '<h4>$1</h4>')
-    // Text formatting
-    .replace(/\\textbf{([^}]*)}/g, '<strong>$1</strong>')
-    .replace(/\\textit{([^}]*)}/g, '<em>$1</em>')
-    .replace(/\\texttt{([^}]*)}/g, '<code>$1</code>')
-    .replace(/\\emph{([^}]*)}/g, '<em>$1</em>')
+    .replace(/\\section\*?{([^}]*)}/g, (_, s) => `<h2>${escapeHtml(s)}</h2>`)
+    .replace(/\\subsection\*?{([^}]*)}/g, (_, s) => `<h3>${escapeHtml(s)}</h3>`)
+    .replace(/\\subsubsection\*?{([^}]*)}/g, (_, s) => `<h4>${escapeHtml(s)}</h4>`)
+    .replace(/\\textbf{([^}]*)}/g, (_, s) => `<strong>${escapeHtml(s)}</strong>`)
+    .replace(/\\textit{([^}]*)}/g, (_, s) => `<em>${escapeHtml(s)}</em>`)
+    .replace(/\\texttt{([^}]*)}/g, (_, s) => `<code>${escapeHtml(s)}</code>`)
+    .replace(/\\emph{([^}]*)}/g, (_, s) => `<em>${escapeHtml(s)}</em>`)
     // Lists
     .replace(/\\begin{itemize}/g, '<ul>')
     .replace(/\\end{itemize}/g, '</ul>')
@@ -494,8 +510,8 @@ function convertLatexToHTML(latex) {
     .replace(/\\end{equation}/g, '\\]')
     .replace(/\\begin{align\*?}/g, '\\[\\begin{aligned}')
     .replace(/\\end{align\*?}/g, '\\end{aligned}\\]')
-    // Verbatim
-    .replace(/\\begin{verbatim}([\s\S]*?)\\end{verbatim}/g, '<pre>$1</pre>')
+    // Verbatim — escape content inside to prevent XSS
+    .replace(/\\begin{verbatim}([\s\S]*?)\\end{verbatim}/g, (_, s) => `<pre>${escapeHtml(s)}</pre>`)
     // Maketitle
     .replace(/\\maketitle/, '');
   
@@ -625,85 +641,78 @@ function convertLatexToHTML(latex) {
 }
 
 /**
- * Create PDF from HTML content
+ * Create PDF-preview blob from HTML content.
+ * No intermediate iframe needed — just wrap the HTML string in a Blob.
  */
 async function createPDFFromHTML(htmlContent) {
-  return new Promise((resolve, reject) => {
-    // Create an iframe to render the HTML
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'absolute';
-    iframe.style.width = '8.5in';
-    iframe.style.height = '11in';
-    iframe.style.left = '-9999px';
-    document.body.appendChild(iframe);
-    
-    const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-    iframeDoc.open();
-    iframeDoc.write(htmlContent);
-    iframeDoc.close();
-    
-    // Wait for content to load
-    iframe.onload = () => {
-      setTimeout(() => {
-        try {
-          // For now, we'll just display the HTML in the preview
-          // In a real implementation, you'd use a library like jsPDF with html2canvas
-          // or better yet, SwiftLaTeX for true LaTeX compilation
-          
-          // Create a blob with the HTML for preview
-          const blob = new Blob([htmlContent], { type: 'text/html' });
-          document.body.removeChild(iframe);
-          resolve(blob);
-        } catch (error) {
-          document.body.removeChild(iframe);
-          reject(error);
-        }
-      }, 500);
-    };
-    
-    iframe.onerror = () => {
-      document.body.removeChild(iframe);
-      reject(new Error('Failed to render HTML'));
-    };
-  });
+  return new Blob([htmlContent], { type: 'text/html' });
 }
 
 // ============================================
 // PDF RENDERING
 // ============================================
 
-async function renderPDF(blob) {
-  // Revoke previous blob URL to prevent memory leaks
-  const existingIframe = elements.previewContent.querySelector('iframe');
-  if (existingIframe && existingIframe.dataset.blobUrl) {
-    URL.revokeObjectURL(existingIframe.dataset.blobUrl);
-  }
-  
-  // Convert blob to URL
+/**
+ * Render the compiled HTML blob into the preview panel.
+ * Uses double-buffering: loads new content in a hidden iframe, then swaps
+ * it into the DOM only after load completes, keeping old content visible
+ * until the new content is ready.
+ */
+async function renderPDF(blob, generation) {
   const url = URL.createObjectURL(blob);
-  
-  // Reuse existing iframe if available (only reload src, don't recreate)
-  if (existingIframe) {
-    existingIframe.dataset.blobUrl = url;
-    existingIframe.src = url;
-  } else {
-    // Create an iframe to display the HTML
-    const iframe = document.createElement('iframe');
-    iframe.style.width = '100%';
-    iframe.style.minHeight = '11in';
-    iframe.style.border = 'none';
-    iframe.style.background = 'white';
-    iframe.style.boxShadow = '0 20px 25px rgba(42, 39, 36, 0.1), 0 10px 10px rgba(42, 39, 36, 0.04)';
-    iframe.style.borderRadius = '2px';
-    iframe.dataset.blobUrl = url;
-    iframe.src = url;
-    
-    elements.previewContent.innerHTML = '';
-    elements.previewContent.appendChild(iframe);
-  }
-  
-  // Apply zoom
-  applyZoom();
+
+  return new Promise((resolve) => {
+    const newIframe = document.createElement('iframe');
+    newIframe.style.width = '100%';
+    newIframe.style.minHeight = '11in';
+    newIframe.style.border = 'none';
+    newIframe.style.background = 'white';
+    newIframe.style.boxShadow = '0 20px 25px rgba(42, 39, 36, 0.1), 0 10px 10px rgba(42, 39, 36, 0.04)';
+    newIframe.style.borderRadius = '2px';
+    // Sandbox: allow scripts (MathJax) but block same-origin access to parent
+    newIframe.setAttribute('sandbox', 'allow-scripts');
+    newIframe.dataset.blobUrl = url;
+
+    // Keep hidden until loaded
+    newIframe.style.position = 'absolute';
+    newIframe.style.visibility = 'hidden';
+
+    newIframe.onload = () => {
+      // Stale compile — discard this iframe
+      if (generation !== state.compileGeneration) {
+        URL.revokeObjectURL(url);
+        if (newIframe.parentNode) newIframe.parentNode.removeChild(newIframe);
+        resolve();
+        return;
+      }
+
+      // Revoke old blob URL and remove old iframe
+      const oldIframe = elements.previewContent.querySelector('iframe:not([data-pending])');
+      if (oldIframe && oldIframe.dataset.blobUrl) {
+        URL.revokeObjectURL(oldIframe.dataset.blobUrl);
+      }
+
+      // Swap: make new iframe visible and clear old content
+      newIframe.style.position = '';
+      newIframe.style.visibility = '';
+      newIframe.removeAttribute('data-pending');
+      elements.previewContent.innerHTML = '';
+      elements.previewContent.appendChild(newIframe);
+      applyZoom();
+      resolve();
+    };
+
+    newIframe.onerror = () => {
+      URL.revokeObjectURL(url);
+      if (newIframe.parentNode) newIframe.parentNode.removeChild(newIframe);
+      resolve();
+    };
+
+    // Append hidden iframe (marked as pending) and start loading
+    newIframe.setAttribute('data-pending', 'true');
+    elements.previewContent.appendChild(newIframe);
+    newIframe.src = url;
+  });
 }
 
 // ============================================
@@ -739,61 +748,92 @@ function downloadPDF() {
   
   try {
     showLoading('Generating PDF...');
-    
-    // Get the iframe content
-    const iframe = elements.previewContent.querySelector('iframe');
-    if (!iframe) {
-      throw new Error('No preview available');
+
+    // Create a temporary unsandboxed iframe for export rendering
+    // (the preview iframe is sandboxed and blocks parent DOM access)
+    const htmlContent = state.lastHtmlContent;
+    if (!htmlContent) {
+      throw new Error('No compiled content available. Please compile first.');
     }
-    
-    const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-    const iframeBody = iframeDoc.body;
-    
-    // Use html2canvas and jsPDF to generate PDF
-    html2canvas(iframeBody, {
-      scale: 2,
-      useCORS: true,
-      logging: false,
-      backgroundColor: '#ffffff'
-    }).then(canvas => {
-      const imgData = canvas.toDataURL('image/png');
-      
-      // Calculate PDF dimensions
-      const imgWidth = 210; // A4 width in mm
-      const pageHeight = 297; // A4 height in mm
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      let heightLeft = imgHeight;
-      let position = 0;
-      
-      // Create PDF
-      const { jsPDF } = window.jspdf;
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      
-      // Add first page
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-      
-      // Add additional pages if needed
-      while (heightLeft > 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
-      }
-      
-      // Download PDF
-      pdf.save('document.pdf');
-      
+
+    const exportIframe = document.createElement('iframe');
+    exportIframe.style.position = 'absolute';
+    exportIframe.style.width = '8.5in';
+    exportIframe.style.height = '11in';
+    exportIframe.style.left = '-9999px';
+    document.body.appendChild(exportIframe);
+
+    const exportDoc = exportIframe.contentDocument || exportIframe.contentWindow.document;
+    exportDoc.open();
+    exportDoc.write(htmlContent);
+    exportDoc.close();
+
+    exportIframe.onload = () => {
+      setTimeout(() => {
+        try {
+          const exportBody = exportDoc.body;
+
+          html2canvas(exportBody, {
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            backgroundColor: '#ffffff'
+          }).then(canvas => {
+            document.body.removeChild(exportIframe);
+
+            const imgData = canvas.toDataURL('image/png');
+            const imgWidth = 210;
+            const pageHeight = 297;
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            let heightLeft = imgHeight;
+            let position = 0;
+
+            const { jsPDF } = window.jspdf;
+            const pdf = new jsPDF('p', 'mm', 'a4');
+
+            pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+            heightLeft -= pageHeight;
+
+            while (heightLeft > 0) {
+              position = heightLeft - imgHeight;
+              pdf.addPage();
+              pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+              heightLeft -= pageHeight;
+            }
+
+            pdf.save('document.pdf');
+            hideLoading();
+            showSuccessToast('PDF downloaded successfully');
+          }).catch(error => {
+            document.body.removeChild(exportIframe);
+            hideLoading();
+            console.error('PDF generation error:', error);
+
+            // Fallback: open print dialog via a fresh window
+            const printWindow = window.open('', '_blank');
+            if (printWindow) {
+              printWindow.document.write(htmlContent);
+              printWindow.document.close();
+              printWindow.print();
+              showSuccessToast('Print dialog opened. Save as PDF from print options.');
+            } else {
+              showErrorToast('Failed to generate PDF. Please allow pop-ups and try again.');
+            }
+          });
+        } catch (error) {
+          document.body.removeChild(exportIframe);
+          hideLoading();
+          console.error('PDF export error:', error);
+          showErrorToast('Failed to export PDF: ' + error.message);
+        }
+      }, 500);
+    };
+
+    exportIframe.onerror = () => {
+      document.body.removeChild(exportIframe);
       hideLoading();
-      showSuccessToast('PDF downloaded successfully');
-    }).catch(error => {
-      hideLoading();
-      console.error('PDF generation error:', error);
-      
-      // Fallback to print
-      iframe.contentWindow.print();
-      showSuccessToast('Print dialog opened. Save as PDF from print options.');
-    });
+      showErrorToast('Failed to render content for PDF export');
+    };
   } catch (error) {
     hideLoading();
     console.error('PDF download error:', error);
@@ -998,6 +1038,78 @@ function escapeLatex(str) {
     .replace(/[&%$#_{}]/g, match => '\\' + match)
     .replace(/\^/g, '\\textasciicircum{}')
     .replace(/~/g, '\\textasciitilde{}');
+}
+
+/**
+ * Escape HTML special characters to prevent XSS
+ * @param {string} str - The string to escape
+ * @returns {string} - The HTML-safe string
+ */
+function escapeHtml(str) {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * Validate and sanitize a filename or path segment.
+ * Rejects path traversal, control characters, and dangerous patterns.
+ * @param {string} name - The filename to validate
+ * @returns {string|null} - Sanitized name, or null if invalid
+ */
+function sanitizeFilename(name) {
+  if (!name || typeof name !== 'string') return null;
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+
+  // Reject path traversal
+  if (trimmed.includes('..') || trimmed.startsWith('/') || trimmed.includes('\\')) return null;
+
+  // Reject control characters
+  if (/[\x00-\x1f\x7f]/.test(trimmed)) return null;
+
+  // Reject empty segments (double slashes)
+  if (/\/\//.test(trimmed)) return null;
+
+  // Reject very long names
+  if (trimmed.length > 255) return null;
+
+  return trimmed;
+}
+
+/**
+ * Validate a file path from a ZIP entry or user input.
+ * @param {string} path - The path to validate
+ * @returns {string|null} - Normalized safe path, or null if invalid
+ */
+function sanitizePath(path) {
+  if (!path || typeof path !== 'string') return null;
+
+  // Normalize and trim
+  let normalized = path.trim().replace(/\\/g, '/');
+
+  // Strip leading slashes
+  while (normalized.startsWith('/')) {
+    normalized = normalized.substring(1);
+  }
+
+  // Reject empty
+  if (!normalized) return null;
+
+  // Check each segment
+  const segments = normalized.split('/');
+  for (const seg of segments) {
+    if (!seg || seg === '.' || seg === '..') return null;
+    if (/[\x00-\x1f\x7f]/.test(seg)) return null;
+  }
+
+  if (normalized.length > 1024) return null;
+
+  return normalized;
 }
 
 /**
@@ -1381,28 +1493,33 @@ async function handleZipUpload(event) {
         skippedCount++;
         continue;
       }
+
+      // Validate and sanitize the file path
+      const safePath = sanitizePath(path);
+      if (!safePath) {
+        skippedCount++;
+        if (DEBUG_MODE) console.log('[ZIP] Rejected unsafe path:', path);
+        continue;
+      }
       
       // Determine if file is binary based on extension
-      const isBinary = BINARY_EXTENSIONS.test(path);
+      const isBinary = BINARY_EXTENSIONS.test(safePath);
       
       if (isBinary) {
-        // Read binary files as base64 to preserve their content
         const base64Content = await zipEntry.async('base64');
-        rawFiles[path] = { isBinary: true, content: base64Content };
+        rawFiles[safePath] = { isBinary: true, content: base64Content };
       } else {
-        // Read text files as string
         const content = await zipEntry.async('string');
-        rawFiles[path] = content;
+        rawFiles[safePath] = content;
       }
       
       // Try to find main .tex file
-      if (path.endsWith('.tex')) {
-        const filename = path.split('/').pop();
-        // Prioritize files with common main document names
+      if (safePath.endsWith('.tex')) {
+        const filename = safePath.split('/').pop();
         if (!mainTexFile || 
             filename.match(/^(main|document|thesis|paper|article)\.tex$/i) ||
-            path === filename) { // Root level .tex file
-          mainTexFile = path;
+            safePath === filename) {
+          mainTexFile = safePath;
         }
       }
     }
@@ -1932,8 +2049,14 @@ function hideContextMenu() {
 function addNewFile(parentPath) {
   const filename = prompt('Enter new file name (e.g., chapter1.tex):');
   if (!filename) return;
+
+  const safeName = sanitizeFilename(filename);
+  if (!safeName) {
+    showErrorToast('Invalid filename. Avoid special characters, ".." and leading slashes.');
+    return;
+  }
   
-  const newPath = parentPath ? `${parentPath}/${filename}` : filename;
+  const newPath = parentPath ? `${parentPath}/${safeName}` : safeName;
   
   if (state.projectFiles[newPath]) {
     showErrorToast('File already exists');
@@ -1966,9 +2089,14 @@ function addNewFile(parentPath) {
 function addNewFolder(parentPath) {
   const foldername = prompt('Enter new folder name:');
   if (!foldername) return;
+
+  const safeName = sanitizeFilename(foldername);
+  if (!safeName || safeName.includes('/')) {
+    showErrorToast('Invalid folder name. Avoid special characters, ".." and slashes.');
+    return;
+  }
   
-  // Add a placeholder .gitkeep file to create the folder structure
-  const placeholderPath = parentPath ? `${parentPath}/${foldername}/.gitkeep` : `${foldername}/.gitkeep`;
+  const placeholderPath = parentPath ? `${parentPath}/${safeName}/.gitkeep` : `${safeName}/.gitkeep`;
   
   if (state.projectFiles[placeholderPath]) {
     showErrorToast('Folder already exists');
@@ -1983,7 +2111,7 @@ function addNewFolder(parentPath) {
   // Auto-save project
   saveProjectToLocalStorage();
   
-  showSuccessToast(`Created folder ${foldername}`);
+  showSuccessToast(`Created folder ${safeName}`);
 }
 
 /**
@@ -1993,9 +2121,15 @@ function renameFile(oldPath) {
   const oldName = oldPath.split('/').pop();
   const newName = prompt('Enter new file name:', oldName);
   if (!newName || newName === oldName) return;
+
+  const safeName = sanitizeFilename(newName);
+  if (!safeName || safeName.includes('/')) {
+    showErrorToast('Invalid filename. Avoid special characters, ".." and slashes.');
+    return;
+  }
   
   const pathParts = oldPath.split('/');
-  pathParts[pathParts.length - 1] = newName;
+  pathParts[pathParts.length - 1] = safeName;
   const newPath = pathParts.join('/');
   
   if (state.projectFiles[newPath]) {
@@ -2010,7 +2144,7 @@ function renameFile(oldPath) {
   // Update current file reference if needed
   if (state.currentFile === oldPath) {
     state.currentFile = newPath;
-    elements.currentFileName.textContent = newName;
+    elements.currentFileName.textContent = safeName;
   }
   
   // Update main file reference if needed
@@ -2024,7 +2158,7 @@ function renameFile(oldPath) {
   // Auto-save project
   saveProjectToLocalStorage();
   
-  showSuccessToast(`Renamed to ${newName}`);
+  showSuccessToast(`Renamed to ${safeName}`);
 }
 
 /**
@@ -2034,9 +2168,15 @@ function renameFolder(oldPath) {
   const oldName = oldPath.split('/').pop();
   const newName = prompt('Enter new folder name:', oldName);
   if (!newName || newName === oldName) return;
+
+  const safeName = sanitizeFilename(newName);
+  if (!safeName || safeName.includes('/')) {
+    showErrorToast('Invalid folder name. Avoid special characters, ".." and slashes.');
+    return;
+  }
   
   const pathParts = oldPath.split('/');
-  pathParts[pathParts.length - 1] = newName;
+  pathParts[pathParts.length - 1] = safeName;
   const newPath = pathParts.join('/');
   
   // Move all files in the folder
@@ -2064,7 +2204,7 @@ function renameFolder(oldPath) {
   // Auto-save project
   saveProjectToLocalStorage();
   
-  showSuccessToast(`Renamed folder to ${newName}`);
+  showSuccessToast(`Renamed folder to ${safeName}`);
 }
 
 /**

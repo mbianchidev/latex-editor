@@ -24,8 +24,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: latex-editor-backend
-    ports:
-      - "5000:5000"
+    expose:
+      - "5000"
     environment:
       - DEBUG=false
       - PORT=5000
