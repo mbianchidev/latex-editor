@@ -484,13 +484,16 @@ function convertLatexToHTML(latex) {
     const cleanLast = nameMatch[2].replace(/\\color\{[^}]*\}/g, '');
     title = escapeHtml((cleanFirst + ' ' + cleanLast).trim());
     if (positionMatch) {
-      subtitle = escapeHtml(
-        positionMatch[1]
-          .replace(/\\enskip\\cdotp\\enskip/g, ' · ')
-          .replace(/\\enskip/g, ' ')
-          .replace(/\\cdotp/g, '·')
-          .replace(/\\color\{[^}]*\}/g, '')
-      );
+      let pos = positionMatch[1];
+      // Clean up CV formatting commands
+      pos = pos
+        .replace(/\{\\enskip\\cdotp\\enskip\}/g, ' · ')
+        .replace(/\\enskip\\cdotp\\enskip/g, ' · ')
+        .replace(/\\enskip/g, ' ')
+        .replace(/\\cdotp/g, '·')
+        .replace(/\\color\{[^}]*\}/g, '')
+        .replace(/\{([^{}]*)\}/g, '$1'); // Remove remaining bare braces
+      subtitle = escapeHtml(pos.trim());
     }
     const contacts = [];
     if (emailMatch) contacts.push(emailMatch[1]);
@@ -566,11 +569,8 @@ function convertLatexToHTML(latex) {
   // 8. Parse \cventry with 5 balanced-brace arguments
   content = parseCvEntries(content);
 
-  // 9. Parse \cvskill{category}{skills}
-  content = content.replace(/\\cvskill\s*\{([^}]*)\}\s*\{([^}]*)\}/g, (_, cat, skills) => {
-    const cleanCat = cat.replace(/\\color\{[^}]*\}/g, '');
-    return `<div class="cv-skill"><strong>${escapeHtml(cleanCat)}</strong>: ${escapeHtml(skills)}</div>`;
-  });
+  // 9. Parse \cvskill with balanced-brace arguments
+  content = parseCvSkills(content);
 
   // 10. CV environments → simple containers
   content = content
@@ -792,6 +792,43 @@ function parseCvEntries(content) {
   }
 
   // Apply in reverse to preserve positions
+  for (let i = replacements.length - 1; i >= 0; i--) {
+    const r = replacements[i];
+    content = content.substring(0, r.start) + r.html + content.substring(r.end);
+  }
+
+  return content;
+}
+
+/**
+ * Parse \cvskill commands with 2 balanced-brace arguments.
+ */
+function parseCvSkills(content) {
+  const regex = /\\cvskill\s*/g;
+  let match;
+  const replacements = [];
+
+  while ((match = regex.exec(content)) !== null) {
+    const startPos = match.index;
+    let pos = match.index + match[0].length;
+
+    const args = [];
+    for (let i = 0; i < 2; i++) {
+      const group = extractBraceGroup(content, pos);
+      if (!group) break;
+      args.push(group.value);
+      pos = group.end;
+      while (pos < content.length && /\s/.test(content[pos])) pos++;
+    }
+
+    if (args.length >= 2) {
+      const cat = args[0].replace(/\\color\{[^}]*\}/g, '').trim();
+      const skills = args[1].replace(/\\color\{[^}]*\}/g, '').trim();
+      const html = `<div class="cv-skill"><strong>${escapeHtml(cat)}</strong>: ${escapeHtml(skills)}</div>`;
+      replacements.push({ start: startPos, end: pos, html });
+    }
+  }
+
   for (let i = replacements.length - 1; i >= 0; i--) {
     const r = replacements[i];
     content = content.substring(0, r.start) + r.html + content.substring(r.end);
@@ -2051,6 +2088,10 @@ function resolveIncludes(content, currentPath, visitedFiles = new Set()) {
   }
   
   visitedFiles.add(currentPath);
+
+  // Strip comments before resolving — prevents resolving %\input{...}
+  content = content.replace(/^%.*$/gm, '');
+  content = content.replace(/([^\\])%.*$/gm, '$1');
   
   // Get directory of current file
   const dir = currentPath.split('/').slice(0, -1).join('/');
