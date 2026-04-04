@@ -845,13 +845,12 @@ async function renderPDF(blob, generation) {
     newIframe.style.background = 'white';
     newIframe.style.boxShadow = '0 20px 25px rgba(42, 39, 36, 0.1), 0 10px 10px rgba(42, 39, 36, 0.04)';
     newIframe.style.borderRadius = '2px';
-    // Sandbox: allow scripts (MathJax) but block same-origin access to parent
-    newIframe.setAttribute('sandbox', 'allow-scripts');
     newIframe.dataset.blobUrl = url;
 
     // Keep hidden until loaded
     newIframe.style.position = 'absolute';
     newIframe.style.visibility = 'hidden';
+    newIframe.setAttribute('data-pending', 'true');
 
     newIframe.onload = () => {
       // Stale compile — discard this iframe
@@ -862,18 +861,20 @@ async function renderPDF(blob, generation) {
         return;
       }
 
-      // Revoke old blob URL and remove old iframe
-      const oldIframe = elements.previewContent.querySelector('iframe:not([data-pending])');
-      if (oldIframe && oldIframe.dataset.blobUrl) {
-        URL.revokeObjectURL(oldIframe.dataset.blobUrl);
+      // Remove old children (but NOT the new iframe which is already in the DOM)
+      const children = Array.from(elements.previewContent.children);
+      for (const child of children) {
+        if (child === newIframe) continue;
+        if (child.dataset && child.dataset.blobUrl) {
+          URL.revokeObjectURL(child.dataset.blobUrl);
+        }
+        elements.previewContent.removeChild(child);
       }
 
-      // Swap: make new iframe visible and clear old content
+      // Make new iframe visible
       newIframe.style.position = '';
       newIframe.style.visibility = '';
       newIframe.removeAttribute('data-pending');
-      elements.previewContent.innerHTML = '';
-      elements.previewContent.appendChild(newIframe);
       applyZoom();
       resolve();
     };
@@ -884,8 +885,7 @@ async function renderPDF(blob, generation) {
       resolve();
     };
 
-    // Append hidden iframe (marked as pending) and start loading
-    newIframe.setAttribute('data-pending', 'true');
+    // Append hidden iframe and start loading
     elements.previewContent.appendChild(newIframe);
     newIframe.src = url;
   });
@@ -1306,7 +1306,8 @@ function saveToLocalStorage() {
 }
 
 /**
- * Save project to localStorage with compression
+ * Save project to localStorage.
+ * Strips binary files if the project is too large to fit in localStorage.
  */
 function saveProjectToLocalStorage() {
   if (!state.projectMode) return;
@@ -1315,7 +1316,6 @@ function saveProjectToLocalStorage() {
     // Save current file content first
     if (state.currentFile && state.projectFiles[state.currentFile] !== undefined) {
       const currentContent = state.projectFiles[state.currentFile];
-      // Only update if it's a text file (not binary)
       if (!isBinaryContent(currentContent)) {
         state.projectFiles[state.currentFile] = state.currentLatex;
       }
@@ -1327,15 +1327,40 @@ function saveProjectToLocalStorage() {
       currentFile: state.currentFile
     };
     
-    // Encode and save
-    const encoded = encodeForStorage(JSON.stringify(projectData));
+    // Try saving the full project first
+    let encoded;
+    try {
+      encoded = encodeForStorage(JSON.stringify(projectData));
+      localStorage.setItem('latexEditor_project', encoded);
+      localStorage.setItem('latexEditor_projectMode', 'true');
+      return;
+    } catch (e) {
+      if (e.name !== 'QuotaExceededError') throw e;
+    }
+
+    // Full project too large — save text files only (skip binary/fonts/images)
+    const textOnlyFiles = {};
+    for (const [path, content] of Object.entries(state.projectFiles)) {
+      if (!isBinaryContent(content)) {
+        textOnlyFiles[path] = content;
+      }
+    }
+
+    const lightData = {
+      files: textOnlyFiles,
+      mainFile: state.mainFile,
+      currentFile: state.currentFile,
+      binaryFilesStripped: true
+    };
+
+    encoded = encodeForStorage(JSON.stringify(lightData));
     localStorage.setItem('latexEditor_project', encoded);
     localStorage.setItem('latexEditor_projectMode', 'true');
+    console.warn('Project saved without binary files (fonts/images) due to storage limits.');
   } catch (error) {
     console.error('Failed to save project to localStorage:', error);
-    // If storage quota exceeded, show a warning
     if (error.name === 'QuotaExceededError') {
-      showErrorToast('Storage quota exceeded. Consider downloading your project as ZIP.');
+      showErrorToast('Storage quota exceeded. Download your project as ZIP to keep it safe.');
     }
   }
 }
@@ -1408,7 +1433,11 @@ function loadProjectFromLocalStorage() {
     elements.toggleFileTreeBtn.style.display = 'inline-block';
     elements.downloadZipBtn.style.display = 'inline-block';
     
-    showSuccessToast('Project restored from last session');
+    showSuccessToast(
+      projectData.binaryFilesStripped
+        ? 'Project restored (fonts/images excluded — re-upload ZIP for full project)'
+        : 'Project restored from last session'
+    );
     
     return true;
   } catch (error) {
