@@ -404,7 +404,7 @@ async function compile(isInitial = false) {
     state.lastCompileTime = Date.now() - startTime;
     state.lastHtmlContent = htmlContent;
     
-    await renderPDF(htmlContent, generation);
+    renderPDF(htmlContent, generation);
     
     showStatus(`Compiled successfully (${state.lastCompileTime}ms)`, 'success');
     showSuccessToast(`Document compiled in ${state.lastCompileTime}ms`);
@@ -805,57 +805,36 @@ function parseCvEntries(content) {
 // ============================================
 
 /**
- * Render the compiled HTML into the preview panel using srcdoc.
- * Uses srcdoc instead of blob URLs for reliable cross-browser rendering.
- * Double-buffered: new iframe loads hidden, swaps in on load.
+ * Render the compiled HTML into the preview panel.
+ * Uses document.write into a fresh iframe — avoids srcdoc/blob onload loops.
  */
-async function renderPDF(htmlString, generation) {
-  return new Promise((resolve) => {
-    const newIframe = document.createElement('iframe');
-    newIframe.style.width = '100%';
-    newIframe.style.minHeight = '11in';
-    newIframe.style.border = 'none';
-    newIframe.style.background = 'white';
-    newIframe.style.boxShadow = '0 20px 25px rgba(42, 39, 36, 0.1), 0 10px 10px rgba(42, 39, 36, 0.04)';
-    newIframe.style.borderRadius = '2px';
-    newIframe.setAttribute('data-pending', 'true');
+function renderPDF(htmlString, generation) {
+  // Stale check
+  if (generation !== state.compileGeneration) return;
 
-    // Initially invisible
-    newIframe.style.opacity = '0';
-    newIframe.style.height = '0';
-    newIframe.style.overflow = 'hidden';
+  // Remove all existing children (old iframes, welcome message)
+  while (elements.previewContent.firstChild) {
+    elements.previewContent.removeChild(elements.previewContent.firstChild);
+  }
 
-    newIframe.onload = function handleLoad() {
-      // Prevent re-entrant calls — onload fires once then we detach it
-      newIframe.onload = null;
+  // Create a fresh iframe
+  const iframe = document.createElement('iframe');
+  iframe.style.width = '100%';
+  iframe.style.minHeight = '11in';
+  iframe.style.border = 'none';
+  iframe.style.background = 'white';
+  iframe.style.boxShadow = '0 20px 25px rgba(42, 39, 36, 0.1), 0 10px 10px rgba(42, 39, 36, 0.04)';
+  iframe.style.borderRadius = '2px';
 
-      // Stale compile — discard
-      if (generation !== state.compileGeneration) {
-        if (newIframe.parentNode) newIframe.parentNode.removeChild(newIframe);
-        resolve();
-        return;
-      }
+  elements.previewContent.appendChild(iframe);
 
-      // Remove all old children except the new iframe
-      const children = Array.from(elements.previewContent.children);
-      for (const child of children) {
-        if (child === newIframe) continue;
-        elements.previewContent.removeChild(child);
-      }
+  // Write content directly — no onload needed
+  const doc = iframe.contentDocument || iframe.contentWindow.document;
+  doc.open();
+  doc.write(htmlString);
+  doc.close();
 
-      // Make visible
-      newIframe.style.opacity = '';
-      newIframe.style.height = '';
-      newIframe.style.overflow = '';
-      newIframe.removeAttribute('data-pending');
-      applyZoom();
-      resolve();
-    };
-
-    // Set srcdoc BEFORE appending to DOM to avoid double onload
-    newIframe.srcdoc = htmlString;
-    elements.previewContent.appendChild(newIframe);
-  });
+  applyZoom();
 }
 
 // ============================================
