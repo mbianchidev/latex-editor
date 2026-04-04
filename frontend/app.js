@@ -474,6 +474,7 @@ function convertLatexToHTML(latex) {
   const emailMatch = latex.match(/\\email\{([^}]*)\}/);
   const githubMatch = latex.match(/\\github\{([^}]*)\}/);
   const linkedinMatch = latex.match(/\\linkedin\{([^}]*)\}/);
+  const mediumMatch = latex.match(/\\medium\{([^}]*)\}/);
 
   let title = '';
   let subtitle = '';
@@ -485,21 +486,34 @@ function convertLatexToHTML(latex) {
     title = escapeHtml((cleanFirst + ' ' + cleanLast).trim());
     if (positionMatch) {
       let pos = positionMatch[1];
-      // Clean up CV formatting commands
       pos = pos
         .replace(/\{\\enskip\\cdotp\\enskip\}/g, ' · ')
         .replace(/\\enskip\\cdotp\\enskip/g, ' · ')
         .replace(/\\enskip/g, ' ')
         .replace(/\\cdotp/g, '·')
         .replace(/\\color\{[^}]*\}/g, '')
-        .replace(/\{([^{}]*)\}/g, '$1'); // Remove remaining bare braces
+        .replace(/\{([^{}]*)\}/g, '$1');
       subtitle = escapeHtml(pos.trim());
     }
-    const contacts = [];
-    if (emailMatch) contacts.push(emailMatch[1]);
-    if (githubMatch) contacts.push('github.com/' + githubMatch[1]);
-    if (linkedinMatch) contacts.push('linkedin.com/in/' + linkedinMatch[1]);
-    if (contacts.length) contactLine = escapeHtml(contacts.join(' | '));
+    // Build contact links as clickable <a> tags
+    const contactParts = [];
+    if (emailMatch) {
+      const e = escapeHtml(emailMatch[1]);
+      contactParts.push(`<a href="mailto:${e}">${e}</a>`);
+    }
+    if (githubMatch) {
+      const g = escapeHtml(githubMatch[1]);
+      contactParts.push(`<a href="https://github.com/${g}" target="_blank" rel="noopener">github.com/${g}</a>`);
+    }
+    if (linkedinMatch) {
+      const l = escapeHtml(linkedinMatch[1]);
+      contactParts.push(`<a href="https://linkedin.com/in/${l}" target="_blank" rel="noopener">linkedin.com/in/${l}</a>`);
+    }
+    if (mediumMatch) {
+      const m = escapeHtml(mediumMatch[1]);
+      contactParts.push(`<a href="https://medium.com/@${m}" target="_blank" rel="noopener">medium.com/@${m}</a>`);
+    }
+    if (contactParts.length) contactLine = contactParts.join(' | ');
   } else {
     title = titleMatch ? escapeHtml(titleMatch[1]) : '';
     subtitle = authorMatch ? escapeHtml(authorMatch[1]) : '';
@@ -612,7 +626,14 @@ function convertLatexToHTML(latex) {
     return arg || '';
   });
 
-  // 14. Paragraph breaks
+  // 14. Remove stray bare braces (LaTeX grouping braces that aren't part of HTML tags)
+  // Only strip { } that aren't inside HTML tags
+  content = content.replace(/\{([^{}]*)\}/g, '$1');
+
+  // 15. Clean up escaped percent signs
+  content = content.replace(/\\%/g, '%');
+
+  // 16. Paragraph breaks
   content = content.replace(/\n\n+/g, '<br><br>');
 
   return `
