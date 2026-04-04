@@ -495,25 +495,25 @@ function convertLatexToHTML(latex) {
         .replace(/\{([^{}]*)\}/g, '$1');
       subtitle = escapeHtml(pos.trim());
     }
-    // Build contact links as clickable <a> tags
+    // Build contact links with inline SVG icons
     const contactParts = [];
     if (emailMatch) {
       const e = escapeHtml(emailMatch[1]);
-      contactParts.push(`<a href="mailto:${e}">${e}</a>`);
+      contactParts.push(`<a href="mailto:${e}" class="contact-link"><svg class="contact-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>${e}</a>`);
     }
     if (githubMatch) {
       const g = escapeHtml(githubMatch[1]);
-      contactParts.push(`<a href="https://github.com/${g}" target="_blank" rel="noopener">github.com/${g}</a>`);
+      contactParts.push(`<a href="https://github.com/${g}" target="_blank" rel="noopener" class="contact-link"><svg class="contact-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>${g}</a>`);
     }
     if (linkedinMatch) {
       const l = escapeHtml(linkedinMatch[1]);
-      contactParts.push(`<a href="https://linkedin.com/in/${l}" target="_blank" rel="noopener">linkedin.com/in/${l}</a>`);
+      contactParts.push(`<a href="https://linkedin.com/in/${l}" target="_blank" rel="noopener" class="contact-link"><svg class="contact-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>${l}</a>`);
     }
     if (mediumMatch) {
       const m = escapeHtml(mediumMatch[1]);
-      contactParts.push(`<a href="https://medium.com/@${m}" target="_blank" rel="noopener">medium.com/@${m}</a>`);
+      contactParts.push(`<a href="https://medium.com/@${m}" target="_blank" rel="noopener" class="contact-link"><svg class="contact-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M13.54 12a6.8 6.8 0 0 1-6.77 6.82A6.8 6.8 0 0 1 0 12a6.8 6.8 0 0 1 6.77-6.82A6.8 6.8 0 0 1 13.54 12zm7.42 0c0 3.54-1.51 6.42-3.38 6.42-1.87 0-3.39-2.88-3.39-6.42s1.52-6.42 3.39-6.42 3.38 2.88 3.38 6.42M24 12c0 3.17-.53 5.75-1.19 5.75-.66 0-1.19-2.58-1.19-5.75s.53-5.75 1.19-5.75C23.47 6.25 24 8.83 24 12z"/></svg>@${m}</a>`);
     }
-    if (contactParts.length) contactLine = contactParts.join(' | ');
+    if (contactParts.length) contactLine = contactParts.join('<span class="contact-sep">|</span>');
   } else {
     title = titleMatch ? escapeHtml(titleMatch[1]) : '';
     subtitle = authorMatch ? escapeHtml(authorMatch[1]) : '';
@@ -630,11 +630,17 @@ function convertLatexToHTML(latex) {
   // Only strip { } that aren't inside HTML tags
   content = content.replace(/\{([^{}]*)\}/g, '$1');
 
-  // 15. Clean up escaped percent signs
+  // 15. Clean up LaTeX escape sequences
   content = content.replace(/\\%/g, '%');
+  content = content.replace(/\\&/g, '&amp;');
+  content = content.replace(/\\#/g, '#');
+  content = content.replace(/\\\$/g, '$');
+  content = content.replace(/\\_/g, '_');
+  content = content.replace(/\\~/g, '~');
 
-  // 16. Paragraph breaks
-  content = content.replace(/\n\n+/g, '<br><br>');
+  // 16. Collapse excessive whitespace — remove runs of <br> tags with only whitespace
+  content = content.replace(/(<br\s*\/?>[\s]*){3,}/gi, '<br><br>');
+  content = content.replace(/\n\n+/g, '<br>');
 
   return `
     <!DOCTYPE html>
@@ -647,9 +653,9 @@ function convertLatexToHTML(latex) {
         body {
           font-family: 'Source Serif 4', Georgia, serif;
           font-size: 12pt;
-          line-height: 1.6;
+          line-height: 1.5;
           max-width: 8.5in;
-          margin: 1in auto;
+          margin: 0.6in auto;
           padding: 0 0.5in;
           color: #2A2724;
           background: white;
@@ -658,25 +664,45 @@ function convertLatexToHTML(latex) {
         h1, h2, h3, h4 {
           font-family: 'Merriweather', Georgia, serif;
           font-weight: 700;
-          margin-top: 1.5em;
-          margin-bottom: 0.5em;
+          margin-top: 0.8em;
+          margin-bottom: 0.3em;
           line-height: 1.3;
         }
 
-        h1 { font-size: 24pt; text-align: center; margin-bottom: 0.25em; }
-        h2 { font-size: 18pt; border-bottom: 1px solid #D4CEC0; padding-bottom: 0.25em; }
-        h3 { font-size: 14pt; }
-        h4 { font-size: 12pt; }
+        h1 { font-size: 22pt; text-align: center; margin-top: 0.3em; margin-bottom: 0.1em; }
+        h2 { font-size: 16pt; border-bottom: 1px solid #D4CEC0; padding-bottom: 0.15em; }
+        h3 { font-size: 13pt; }
+        h4 { font-size: 11pt; }
 
         .author, .date {
           text-align: center;
-          font-size: 11pt;
-          margin-bottom: 0.25em;
+          font-size: 10.5pt;
+          margin-bottom: 0.15em;
           color: #3A3632;
+          line-height: 1.4;
         }
 
-        ul, ol { margin: 0.5em 0; padding-left: 2em; }
-        li { margin: 0.25em 0; }
+        .contact-link {
+          color: #4A6E6B;
+          text-decoration: none;
+          display: inline-flex;
+          align-items: center;
+          gap: 0.2em;
+        }
+        .contact-link:hover { text-decoration: underline; }
+        .contact-icon {
+          width: 0.85em;
+          height: 0.85em;
+          flex-shrink: 0;
+          vertical-align: middle;
+        }
+        .contact-sep {
+          margin: 0 0.4em;
+          color: #A39D8F;
+        }
+
+        ul, ol { margin: 0.3em 0; padding-left: 2em; }
+        li { margin: 0.15em 0; }
 
         .equation { text-align: center; margin: 1.5em 0; padding: 1em; overflow-x: auto; }
 
@@ -707,36 +733,38 @@ function convertLatexToHTML(latex) {
 
         /* CV-specific styles */
         .cv-section {
-          font-size: 14pt;
+          font-size: 12pt;
           text-transform: uppercase;
           letter-spacing: 0.05em;
           color: #4A6E6B;
           border-bottom: 2px solid #4A6E6B;
-          padding-bottom: 0.2em;
-          margin-top: 1.2em;
-          margin-bottom: 0.6em;
+          padding-bottom: 0.15em;
+          margin-top: 0.8em;
+          margin-bottom: 0.4em;
         }
-        .cv-entry { margin-bottom: 0.8em; }
+        .cv-entry { margin-bottom: 0.5em; }
         .cv-entry-header {
           display: flex;
           justify-content: space-between;
           align-items: baseline;
           flex-wrap: wrap;
-          gap: 0.25em;
+          gap: 0.15em;
         }
-        .cv-entry-role { font-weight: 600; font-size: 11pt; }
-        .cv-entry-org { font-size: 11pt; color: #3A3632; }
-        .cv-entry-meta { font-size: 10pt; color: #666; text-align: right; white-space: nowrap; }
-        .cv-entry-body { margin-top: 0.15em; font-size: 10.5pt; }
-        .cv-entry-body ul { margin: 0.15em 0; }
-        .cv-entry-body li { margin: 0.1em 0; }
+        .cv-entry-role { font-weight: 600; font-size: 10.5pt; }
+        .cv-entry-org { font-size: 10.5pt; color: #3A3632; }
+        .cv-entry-meta { font-size: 9.5pt; color: #666; text-align: right; white-space: nowrap; }
+        .cv-entry-body { margin-top: 0.1em; font-size: 10pt; }
+        .cv-entry-body ul { margin: 0.1em 0; }
+        .cv-entry-body li { margin: 0.05em 0; }
 
-        .cv-skills { margin-bottom: 0.5em; }
-        .cv-skill { margin: 0.3em 0; font-size: 11pt; }
+        .cv-skills { margin-bottom: 0.3em; }
+        .cv-skill { margin: 0.2em 0; font-size: 10.5pt; }
 
-        .cv-paragraph { margin: 0.5em 0; font-size: 11pt; line-height: 1.5; }
-        .cv-items { margin: 0.15em 0; padding-left: 1.5em; }
-        .cv-items li { margin: 0.1em 0; font-size: 10.5pt; }
+        .cv-paragraph { margin: 0.3em 0; font-size: 10.5pt; line-height: 1.4; }
+        .cv-items { margin: 0.1em 0; padding-left: 1.5em; }
+        .cv-items li { margin: 0.05em 0; font-size: 10pt; }
+
+        br + br { display: none; }
       </style>
 
       <script>
