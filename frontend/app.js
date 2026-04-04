@@ -395,22 +395,16 @@ async function compile(isInitial = false) {
     
     // Use a simple LaTeX to HTML converter for demo purposes
     // In production, you would use SwiftLaTeX or similar
-    const pdfBlob = await compileLatexToBlob(latexContent);
+    const htmlContent = await compileLatexToBlob(latexContent);
 
     // Stale check — a newer compile was triggered while we were working
     if (generation !== state.compileGeneration) return;
     
-    state.pdfData = pdfBlob;
+    state.pdfData = htmlContent;
     state.lastCompileTime = Date.now() - startTime;
-
-    // Store the raw HTML for export (export needs unsandboxed DOM access)
-    state.lastHtmlContent = convertLatexToHTML(
-      state.projectMode && state.mainFile
-        ? resolveIncludes(state.projectFiles[state.mainFile], state.mainFile)
-        : state.currentLatex
-    );
+    state.lastHtmlContent = htmlContent;
     
-    await renderPDF(pdfBlob, generation);
+    await renderPDF(htmlContent, generation);
     
     showStatus(`Compiled successfully (${state.lastCompileTime}ms)`, 'success');
     showSuccessToast(`Document compiled in ${state.lastCompileTime}ms`);
@@ -427,21 +421,11 @@ async function compile(isInitial = false) {
 }
 
 /**
- * Compile LaTeX to PDF blob
- * This is a simplified version - in production, use SwiftLaTeX or similar
+ * Compile LaTeX to an HTML string for preview.
  */
 async function compileLatexToBlob(latex) {
-  // For this demo, we'll create a simple PDF using a library
-  // In production, you would use SwiftLaTeX WebAssembly engine
-  
   try {
-    // Create a simple HTML representation
-    const htmlContent = convertLatexToHTML(latex);
-    
-    // Create PDF using browser's print functionality
-    const blob = await createPDFFromHTML(htmlContent);
-    
-    return blob;
+    return convertLatexToHTML(latex);
   } catch (error) {
     throw new Error('Failed to compile LaTeX: ' + error.message);
   }
@@ -816,27 +800,16 @@ function parseCvEntries(content) {
   return content;
 }
 
-/**
- * Create PDF-preview blob from HTML content.
- * No intermediate iframe needed — just wrap the HTML string in a Blob.
- */
-async function createPDFFromHTML(htmlContent) {
-  return new Blob([htmlContent], { type: 'text/html' });
-}
-
 // ============================================
 // PDF RENDERING
 // ============================================
 
 /**
- * Render the compiled HTML blob into the preview panel.
- * Uses double-buffering: loads new content in a hidden iframe, then swaps
- * it into the DOM only after load completes, keeping old content visible
- * until the new content is ready.
+ * Render the compiled HTML into the preview panel using srcdoc.
+ * Uses srcdoc instead of blob URLs for reliable cross-browser rendering.
+ * Double-buffered: new iframe loads hidden, swaps in on load.
  */
-async function renderPDF(blob, generation) {
-  const url = URL.createObjectURL(blob);
-
+async function renderPDF(htmlString, generation) {
   return new Promise((resolve) => {
     const newIframe = document.createElement('iframe');
     newIframe.style.width = '100%';
@@ -845,49 +818,45 @@ async function renderPDF(blob, generation) {
     newIframe.style.background = 'white';
     newIframe.style.boxShadow = '0 20px 25px rgba(42, 39, 36, 0.1), 0 10px 10px rgba(42, 39, 36, 0.04)';
     newIframe.style.borderRadius = '2px';
-    newIframe.dataset.blobUrl = url;
-
-    // Keep hidden until loaded
-    newIframe.style.position = 'absolute';
-    newIframe.style.visibility = 'hidden';
     newIframe.setAttribute('data-pending', 'true');
 
+    // Initially invisible — will be shown after content loads
+    newIframe.style.opacity = '0';
+    newIframe.style.height = '0';
+    newIframe.style.overflow = 'hidden';
+
     newIframe.onload = () => {
-      // Stale compile — discard this iframe
+      // Stale compile — discard
       if (generation !== state.compileGeneration) {
-        URL.revokeObjectURL(url);
         if (newIframe.parentNode) newIframe.parentNode.removeChild(newIframe);
         resolve();
         return;
       }
 
-      // Remove old children (but NOT the new iframe which is already in the DOM)
+      // Remove all old children except the new iframe
       const children = Array.from(elements.previewContent.children);
       for (const child of children) {
         if (child === newIframe) continue;
-        if (child.dataset && child.dataset.blobUrl) {
-          URL.revokeObjectURL(child.dataset.blobUrl);
-        }
         elements.previewContent.removeChild(child);
       }
 
-      // Make new iframe visible
-      newIframe.style.position = '';
-      newIframe.style.visibility = '';
+      // Make visible
+      newIframe.style.opacity = '';
+      newIframe.style.height = '';
+      newIframe.style.overflow = '';
       newIframe.removeAttribute('data-pending');
       applyZoom();
       resolve();
     };
 
     newIframe.onerror = () => {
-      URL.revokeObjectURL(url);
       if (newIframe.parentNode) newIframe.parentNode.removeChild(newIframe);
       resolve();
     };
 
-    // Append hidden iframe and start loading
+    // Append to DOM and set srcdoc to trigger load
     elements.previewContent.appendChild(newIframe);
-    newIframe.src = url;
+    newIframe.srcdoc = htmlString;
   });
 }
 
