@@ -448,24 +448,113 @@ async function compileLatexToBlob(latex) {
 }
 
 /**
- * Simple LaTeX to HTML converter (simplified)
- * In production, use a proper LaTeX parser
+ * Extract a balanced brace group from str starting at startPos.
+ * Returns { value, end } where value is the content inside {} and end is the
+ * position right after the closing brace, or null if not found.
+ */
+function extractBraceGroup(str, startPos) {
+  let pos = str.indexOf('{', startPos);
+  if (pos === -1) return null;
+  let depth = 0;
+  const start = pos + 1;
+  for (let i = pos; i < str.length; i++) {
+    if (str[i] === '{') depth++;
+    else if (str[i] === '}') {
+      depth--;
+      if (depth === 0) return { value: str.substring(start, i), end: i + 1 };
+    }
+  }
+  return null;
+}
+
+/**
+ * Convert LaTeX to HTML.
+ * Handles standard article commands plus CV-class commands
+ * (\cvsection, \cventry, \cvskill, \cvparagraph, etc.)
  */
 function convertLatexToHTML(latex) {
-  // Extract content between \begin{document} and \end{document}
-  const docMatch = latex.match(/\\begin{document}([\s\S]*?)\\end{document}/);
+  // 1. Strip LaTeX comments (% to end-of-line) but preserve escaped \%
+  latex = latex.replace(/^%.*$/gm, '');
+  latex = latex.replace(/([^\\])%.*$/gm, '$1');
+
+  // 2. Extract metadata from preamble (before \begin{document})
+  // Use pattern that handles one level of nested braces: (?:[^{}]|\{[^}]*\})*
+  const NB = '(?:[^{}]|\\{[^}]*\\})*'; // nested-brace-safe capture pattern
+  const titleMatch = latex.match(new RegExp(`\\\\title\\{(${NB})\\}`));
+  const authorMatch = latex.match(new RegExp(`\\\\author\\{(${NB})\\}`));
+  const dateMatch = latex.match(new RegExp(`\\\\date\\{(${NB})\\}`));
+
+  // CV-class personal info (handles \color{x} inside arguments)
+  const nameMatch = latex.match(new RegExp(`\\\\name\\{(${NB})\\}\\{(${NB})\\}`));
+  const positionMatch = latex.match(new RegExp(`\\\\position\\{(${NB})\\}`));
+  const emailMatch = latex.match(/\\email\{([^}]*)\}/);
+  const githubMatch = latex.match(/\\github\{([^}]*)\}/);
+  const linkedinMatch = latex.match(/\\linkedin\{([^}]*)\}/);
+
+  let title = '';
+  let subtitle = '';
+  let contactLine = '';
+
+  if (nameMatch) {
+    const cleanFirst = nameMatch[1].replace(/\\color\{[^}]*\}/g, '');
+    const cleanLast = nameMatch[2].replace(/\\color\{[^}]*\}/g, '');
+    title = escapeHtml((cleanFirst + ' ' + cleanLast).trim());
+    if (positionMatch) {
+      subtitle = escapeHtml(
+        positionMatch[1]
+          .replace(/\\enskip\\cdotp\\enskip/g, ' · ')
+          .replace(/\\enskip/g, ' ')
+          .replace(/\\cdotp/g, '·')
+          .replace(/\\color\{[^}]*\}/g, '')
+      );
+    }
+    const contacts = [];
+    if (emailMatch) contacts.push(emailMatch[1]);
+    if (githubMatch) contacts.push('github.com/' + githubMatch[1]);
+    if (linkedinMatch) contacts.push('linkedin.com/in/' + linkedinMatch[1]);
+    if (contacts.length) contactLine = escapeHtml(contacts.join(' | '));
+  } else {
+    title = titleMatch ? escapeHtml(titleMatch[1]) : '';
+    subtitle = authorMatch ? escapeHtml(authorMatch[1]) : '';
+    contactLine = dateMatch
+      ? escapeHtml(dateMatch[1].replace('\\today', new Date().toLocaleDateString()))
+      : '';
+  }
+
+  // 3. Extract document body
+  const docMatch = latex.match(/\\begin\{document\}([\s\S]*?)\\end\{document\}/);
   let content = docMatch ? docMatch[1] : latex;
-  
-  // Extract title, author, date
-  const titleMatch = latex.match(/\\title{([^}]*)}/);
-  const authorMatch = latex.match(/\\author{([^}]*)}/);
-  const dateMatch = latex.match(/\\date{([^}]*)}/);
-  
-  const title = titleMatch ? escapeHtml(titleMatch[1]) : '';
-  const author = authorMatch ? escapeHtml(authorMatch[1]) : '';
-  const date = dateMatch ? escapeHtml(dateMatch[1].replace('\\today', new Date().toLocaleDateString())) : '';
-  
-  // Handle includegraphics - convert to embedded images with base64 data
+
+  // 4. Strip commands that produce no visible output
+  content = content
+    .replace(/\\makecvheader\b/g, '')
+    .replace(/\\makecvfooter[\s\S]*?\{\\thepage\}/g, '')
+    .replace(/\\makecvfooter\b/g, '')
+    .replace(/\\maketitle/g, '')
+    .replace(/\\vspace\*?\{[^}]*\}/g, '')
+    .replace(/\\hspace\*?\{[^}]*\}/g, '')
+    .replace(/\\vfill/g, '')
+    .replace(/\\newpage/g, '')
+    .replace(/\\clearpage/g, '')
+    .replace(/\\pagebreak/g, '')
+    .replace(/\\noindent/g, '')
+    .replace(/\\centering/g, '')
+    .replace(/\\fontdir(\[[^\]]*\])?\{[^}]*\}/g, '')
+    .replace(/\\colorlet\{[^}]*\}\{[^}]*\}/g, '')
+    .replace(/\\setbool\{[^}]*\}\{[^}]*\}/g, '')
+    .replace(/\\renewcommand\{[^}]*\}\{[^}]*\}/g, '')
+    .replace(/\\linespread\{[^}]*\}/g, '')
+    .replace(/\\geometry\{[^}]*\}/g, '')
+    .replace(/\\thepage/g, '');
+
+  // 5. Handle \href{url}{text} → link
+  content = content.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, url, text) => {
+    const safeUrl = escapeHtml(url);
+    const cleanText = text.replace(/\\color\{[^}]*\}/g, '');
+    return `<a href="${safeUrl}" target="_blank" rel="noopener">${escapeHtml(cleanText)}</a>`;
+  });
+
+  // 6. Handle includegraphics
   content = content.replace(/\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}/g, (match, filename) => {
     const safeFilename = escapeHtml(filename);
     if (state.projectMode && state.projectFiles) {
@@ -475,13 +564,7 @@ function convertLatexToHTML(latex) {
         const imgData = state.projectFiles[imgPath];
         if (isBinaryContent(imgData)) {
           const actualExt = imgPath.split('.').pop().toLowerCase();
-          const mimeTypes = {
-            'png': 'image/png',
-            'jpg': 'image/jpeg',
-            'jpeg': 'image/jpeg',
-            'gif': 'image/gif',
-            'svg': 'image/svg+xml'
-          };
+          const mimeTypes = { 'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'gif': 'image/gif', 'svg': 'image/svg+xml' };
           const mimeType = mimeTypes[actualExt] || 'application/octet-stream';
           return `<img src="data:${escapeHtml(mimeType)};base64,${imgData.content}" alt="${safeFilename}" style="max-width: 100%; height: auto;">`;
         }
@@ -489,44 +572,65 @@ function convertLatexToHTML(latex) {
     }
     return `<div style="padding: 1em; background: #f0f0f0; border: 1px dashed #ccc; text-align: center; color: #666;">[Image: ${safeFilename}]</div>`;
   });
-  
-  // Basic conversions — escape captures before inserting into HTML tags
+
+  // 7. CV-class section heading
+  content = content.replace(/\\cvsection\{([^}]*)\}/g, (_, s) => {
+    const clean = s.replace(/\\color\{[^}]*\}/g, '');
+    return `<h2 class="cv-section">${escapeHtml(clean)}</h2>`;
+  });
+
+  // 8. Parse \cventry with 5 balanced-brace arguments
+  content = parseCvEntries(content);
+
+  // 9. Parse \cvskill{category}{skills}
+  content = content.replace(/\\cvskill\s*\{([^}]*)\}\s*\{([^}]*)\}/g, (_, cat, skills) => {
+    const cleanCat = cat.replace(/\\color\{[^}]*\}/g, '');
+    return `<div class="cv-skill"><strong>${escapeHtml(cleanCat)}</strong>: ${escapeHtml(skills)}</div>`;
+  });
+
+  // 10. CV environments → simple containers
   content = content
-    .replace(/\\section\*?{([^}]*)}/g, (_, s) => `<h2>${escapeHtml(s)}</h2>`)
-    .replace(/\\subsection\*?{([^}]*)}/g, (_, s) => `<h3>${escapeHtml(s)}</h3>`)
-    .replace(/\\subsubsection\*?{([^}]*)}/g, (_, s) => `<h4>${escapeHtml(s)}</h4>`)
-    .replace(/\\textbf{([^}]*)}/g, (_, s) => `<strong>${escapeHtml(s)}</strong>`)
-    .replace(/\\textit{([^}]*)}/g, (_, s) => `<em>${escapeHtml(s)}</em>`)
-    .replace(/\\texttt{([^}]*)}/g, (_, s) => `<code>${escapeHtml(s)}</code>`)
-    .replace(/\\emph{([^}]*)}/g, (_, s) => `<em>${escapeHtml(s)}</em>`)
-    // Lists
-    .replace(/\\begin{itemize}/g, '<ul>')
-    .replace(/\\end{itemize}/g, '</ul>')
-    .replace(/\\begin{enumerate}/g, '<ol>')
-    .replace(/\\end{enumerate}/g, '</ol>')
-    .replace(/\\item\s+/g, '<li>')
-    // Math equations - preserve for MathJax
-    .replace(/\\begin{equation}/g, '\\[')
-    .replace(/\\end{equation}/g, '\\]')
-    .replace(/\\begin{align\*?}/g, '\\[\\begin{aligned}')
-    .replace(/\\end{align\*?}/g, '\\end{aligned}\\]')
-    // Verbatim — escape content inside to prevent XSS
-    .replace(/\\begin{verbatim}([\s\S]*?)\\end{verbatim}/g, (_, s) => `<pre>${escapeHtml(s)}</pre>`)
-    // Maketitle
-    .replace(/\\maketitle/, '');
-  
-  // Clean up remaining simple LaTeX commands (but preserve math)
+    .replace(/\\begin\{cventries\}/g, '<div class="cv-entries">')
+    .replace(/\\end\{cventries\}/g, '</div>')
+    .replace(/\\begin\{cvskills\}/g, '<div class="cv-skills">')
+    .replace(/\\end\{cvskills\}/g, '</div>')
+    .replace(/\\begin\{cvparagraph\}/g, '<div class="cv-paragraph">')
+    .replace(/\\end\{cvparagraph\}/g, '</div>')
+    .replace(/\\begin\{cvitems\}/g, '<ul class="cv-items">')
+    .replace(/\\end\{cvitems\}/g, '</ul>');
+
+  // 11. Standard LaTeX conversions
+  content = content
+    .replace(/\\section\*?\{([^}]*)\}/g, (_, s) => `<h2>${escapeHtml(s)}</h2>`)
+    .replace(/\\subsection\*?\{([^}]*)\}/g, (_, s) => `<h3>${escapeHtml(s)}</h3>`)
+    .replace(/\\subsubsection\*?\{([^}]*)\}/g, (_, s) => `<h4>${escapeHtml(s)}</h4>`)
+    .replace(/\\textbf\{([^}]*)\}/g, (_, s) => `<strong>${escapeHtml(s)}</strong>`)
+    .replace(/\\textit\{([^}]*)\}/g, (_, s) => `<em>${escapeHtml(s)}</em>`)
+    .replace(/\\texttt\{([^}]*)\}/g, (_, s) => `<code>${escapeHtml(s)}</code>`)
+    .replace(/\\emph\{([^}]*)\}/g, (_, s) => `<em>${escapeHtml(s)}</em>`)
+    .replace(/\\begin\{itemize\}/g, '<ul>')
+    .replace(/\\end\{itemize\}/g, '</ul>')
+    .replace(/\\begin\{enumerate\}/g, '<ol>')
+    .replace(/\\end\{enumerate\}/g, '</ol>')
+    .replace(/\\item\s*/g, '<li>')
+    .replace(/\\begin\{equation\}/g, '\\[')
+    .replace(/\\end\{equation\}/g, '\\]')
+    .replace(/\\begin\{align\*?\}/g, '\\[\\begin{aligned}')
+    .replace(/\\end\{align\*?\}/g, '\\end{aligned}\\]')
+    .replace(/\\begin\{verbatim\}([\s\S]*?)\\end\{verbatim\}/g, (_, s) => `<pre>${escapeHtml(s)}</pre>`);
+
+  // 12. Strip \color{...} commands (keep surrounding text)
+  content = content.replace(/\\color\{[^}]*\}/g, '');
+
+  // 13. Clean up remaining unknown commands (preserve math-related ones)
   content = content.replace(/\\([a-zA-Z]+)(\{([^}]*)\})?/g, (match, cmd, full, arg) => {
-    // Preserve math-related commands using the whitelist
-    if (LATEX_MATH_COMMANDS.includes(cmd)) {
-      return match;
-    }
+    if (LATEX_MATH_COMMANDS.includes(cmd)) return match;
     return arg || '';
   });
-  
-  // Add line breaks
+
+  // 14. Paragraph breaks
   content = content.replace(/\n\n+/g, '<br><br>');
-  
+
   return `
     <!DOCTYPE html>
     <html>
@@ -534,7 +638,7 @@ function convertLatexToHTML(latex) {
       <meta charset="utf-8">
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Source+Serif+4:wght@300;400;600&display=swap');
-        
+
         body {
           font-family: 'Source Serif 4', Georgia, serif;
           font-size: 12pt;
@@ -545,7 +649,7 @@ function convertLatexToHTML(latex) {
           color: #2A2724;
           background: white;
         }
-        
+
         h1, h2, h3, h4 {
           font-family: 'Merriweather', Georgia, serif;
           font-weight: 700;
@@ -553,35 +657,24 @@ function convertLatexToHTML(latex) {
           margin-bottom: 0.5em;
           line-height: 1.3;
         }
-        
+
         h1 { font-size: 24pt; text-align: center; margin-bottom: 0.25em; }
         h2 { font-size: 18pt; border-bottom: 1px solid #D4CEC0; padding-bottom: 0.25em; }
         h3 { font-size: 14pt; }
         h4 { font-size: 12pt; }
-        
+
         .author, .date {
           text-align: center;
           font-size: 11pt;
           margin-bottom: 0.25em;
           color: #3A3632;
         }
-        
-        ul, ol {
-          margin: 1em 0;
-          padding-left: 2em;
-        }
-        
-        li {
-          margin: 0.5em 0;
-        }
-        
-        .equation {
-          text-align: center;
-          margin: 1.5em 0;
-          padding: 1em;
-          overflow-x: auto;
-        }
-        
+
+        ul, ol { margin: 0.5em 0; padding-left: 2em; }
+        li { margin: 0.25em 0; }
+
+        .equation { text-align: center; margin: 1.5em 0; padding: 1em; overflow-x: auto; }
+
         pre {
           font-family: 'JetBrains Mono', 'Courier New', monospace;
           font-size: 10pt;
@@ -591,7 +684,7 @@ function convertLatexToHTML(latex) {
           overflow-x: auto;
           line-height: 1.5;
         }
-        
+
         code {
           font-family: 'JetBrains Mono', 'Courier New', monospace;
           font-size: 10pt;
@@ -599,22 +692,48 @@ function convertLatexToHTML(latex) {
           padding: 0.125em 0.375em;
           border-radius: 2px;
         }
-        
-        strong {
-          font-weight: 600;
+
+        strong { font-weight: 600; }
+        em { font-style: italic; }
+        a { color: #4A6E6B; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        mjx-container { margin: 1em 0; }
+
+        /* CV-specific styles */
+        .cv-section {
+          font-size: 14pt;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: #4A6E6B;
+          border-bottom: 2px solid #4A6E6B;
+          padding-bottom: 0.2em;
+          margin-top: 1.2em;
+          margin-bottom: 0.6em;
         }
-        
-        em {
-          font-style: italic;
+        .cv-entry { margin-bottom: 0.8em; }
+        .cv-entry-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          flex-wrap: wrap;
+          gap: 0.25em;
         }
-        
-        /* MathJax styling */
-        mjx-container {
-          margin: 1em 0;
-        }
+        .cv-entry-role { font-weight: 600; font-size: 11pt; }
+        .cv-entry-org { font-size: 11pt; color: #3A3632; }
+        .cv-entry-meta { font-size: 10pt; color: #666; text-align: right; white-space: nowrap; }
+        .cv-entry-body { margin-top: 0.15em; font-size: 10.5pt; }
+        .cv-entry-body ul { margin: 0.15em 0; }
+        .cv-entry-body li { margin: 0.1em 0; }
+
+        .cv-skills { margin-bottom: 0.5em; }
+        .cv-skill { margin: 0.3em 0; font-size: 11pt; }
+
+        .cv-paragraph { margin: 0.5em 0; font-size: 11pt; line-height: 1.5; }
+        .cv-items { margin: 0.15em 0; padding-left: 1.5em; }
+        .cv-items li { margin: 0.1em 0; font-size: 10.5pt; }
       </style>
-      
-      <!-- MathJax for math rendering -->
+
       <script>
         MathJax = {
           tex: {
@@ -632,12 +751,69 @@ function convertLatexToHTML(latex) {
     </head>
     <body>
       ${title ? `<h1>${title}</h1>` : ''}
-      ${author ? `<div class="author">${author}</div>` : ''}
-      ${date ? `<div class="date">${date}</div>` : ''}
+      ${subtitle ? `<div class="author">${subtitle}</div>` : ''}
+      ${contactLine ? `<div class="date">${contactLine}</div>` : ''}
       ${content}
     </body>
     </html>
   `;
+}
+
+/**
+ * Parse \cventry commands with 5 balanced-brace arguments.
+ * Handles nested braces in the 5th argument (which contains \begin{cvitems}...).
+ */
+function parseCvEntries(content) {
+  const regex = /\\cventry\s*/g;
+  let match;
+  const replacements = [];
+
+  while ((match = regex.exec(content)) !== null) {
+    const startPos = match.index;
+    let pos = match.index + match[0].length;
+
+    const args = [];
+    for (let i = 0; i < 5; i++) {
+      const group = extractBraceGroup(content, pos);
+      if (!group) break;
+      args.push(group.value);
+      pos = group.end;
+      // skip whitespace between arguments
+      while (pos < content.length && /\s/.test(content[pos])) pos++;
+    }
+
+    if (args.length >= 2) {
+      const org = (args[0] || '').replace(/\\color\{[^}]*\}/g, '');
+      const role = (args[1] || '').replace(/\\color\{[^}]*\}/g, '');
+      const location = (args[2] || '').replace(/\\color\{[^}]*\}/g, '');
+      const dates = (args[3] || '').replace(/\\color\{[^}]*\}/g, '');
+      const body = args[4] || '';
+
+      // Process \href inside org/role
+      const processedOrg = org.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, u, t) =>
+        `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${escapeHtml(t.replace(/\\color\{[^}]*\}/g, ''))}</a>`
+      );
+
+      const metaParts = [location, dates].filter(Boolean).map(s => escapeHtml(s.trim()));
+
+      const html = `<div class="cv-entry">
+        <div class="cv-entry-header">
+          <div><span class="cv-entry-role">${escapeHtml(role.trim())}</span>${org.trim() ? ` — <span class="cv-entry-org">${processedOrg.trim()}</span>` : ''}</div>
+          ${metaParts.length ? `<div class="cv-entry-meta">${metaParts.join(' | ')}</div>` : ''}
+        </div>
+        <div class="cv-entry-body">${body}</div>
+      </div>`;
+      replacements.push({ start: startPos, end: pos, html });
+    }
+  }
+
+  // Apply in reverse to preserve positions
+  for (let i = replacements.length - 1; i >= 0; i--) {
+    const r = replacements[i];
+    content = content.substring(0, r.start) + r.html + content.substring(r.end);
+  }
+
+  return content;
 }
 
 /**
