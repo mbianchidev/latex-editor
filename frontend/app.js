@@ -820,12 +820,15 @@ async function renderPDF(htmlString, generation) {
     newIframe.style.borderRadius = '2px';
     newIframe.setAttribute('data-pending', 'true');
 
-    // Initially invisible — will be shown after content loads
+    // Initially invisible
     newIframe.style.opacity = '0';
     newIframe.style.height = '0';
     newIframe.style.overflow = 'hidden';
 
-    newIframe.onload = () => {
+    newIframe.onload = function handleLoad() {
+      // Prevent re-entrant calls — onload fires once then we detach it
+      newIframe.onload = null;
+
       // Stale compile — discard
       if (generation !== state.compileGeneration) {
         if (newIframe.parentNode) newIframe.parentNode.removeChild(newIframe);
@@ -849,14 +852,9 @@ async function renderPDF(htmlString, generation) {
       resolve();
     };
 
-    newIframe.onerror = () => {
-      if (newIframe.parentNode) newIframe.parentNode.removeChild(newIframe);
-      resolve();
-    };
-
-    // Append to DOM and set srcdoc to trigger load
-    elements.previewContent.appendChild(newIframe);
+    // Set srcdoc BEFORE appending to DOM to avoid double onload
     newIframe.srcdoc = htmlString;
+    elements.previewContent.appendChild(newIframe);
   });
 }
 
