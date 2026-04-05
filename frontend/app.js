@@ -1206,11 +1206,18 @@ function newDocument() {
     return;
   }
   
-  // Reset project state
+  // Save current project to backend before switching
+  if (state.projectMode && state.currentProjectId) {
+    saveProjectToBackend();
+  }
+  
+  // Reset project state (keep currentProjectId — project still exists in DB)
   state.projectMode = false;
   state.projectFiles = {};
   state.currentFile = null;
   state.mainFile = null;
+  state.currentProjectId = null;
+  state.currentProjectName = null;
   
   state.currentLatex = DEFAULT_TEMPLATE;
   elements.editor.value = DEFAULT_TEMPLATE;
@@ -1244,8 +1251,13 @@ function newProject() {
   if (!projectName) return;
   
   if (state.projectMode && Object.keys(state.projectFiles).length > 0 &&
-      !confirm('Create new project? Current project will be lost.')) {
+      !confirm('Create new project? You will switch away from the current project.')) {
     return;
+  }
+  
+  // Save current project to backend before switching
+  if (state.projectMode && state.currentProjectId) {
+    saveProjectToBackend();
   }
   
   // Create basic project structure
@@ -1314,6 +1326,10 @@ This is your new LaTeX project. Edit this file or create new sections.
   
   // Save project to localStorage
   saveProjectToLocalStorage();
+  
+  // Save to backend
+  state.currentProjectName = projectName;
+  saveProjectToBackend();
   
   showSuccessToast(`Created project: ${projectName}`);
   
@@ -1826,6 +1842,11 @@ function cleanCurrentProject() {
 async function handleZipUpload(event) {
   const file = event.target.files[0];
   if (!file) return;
+  
+  // Save current project to backend before loading a new one
+  if (state.projectMode && state.currentProjectId) {
+    await saveProjectToBackend();
+  }
   
   if (!file.name.endsWith('.zip')) {
     showErrorToast('Please upload a ZIP file');
