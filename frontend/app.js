@@ -815,10 +815,10 @@ function convertLatexToHTML(latex) {
   content = content.replace(/(?:<br\s*\/?\s*>[\t ]*\n?){3,}/gi, '<br>');
   content = content.replace(/\n\n+/g, '<br>');
   // Strip <br> immediately after block elements (sections, divs, headings)
-  content = content.replace(/(<\/(?:h[1-6]|div|ul|ol|li|p)>)\s*(?:<br\s*\/?\s*>\s*)+/gi, '$1');
-  content = content.replace(/(<(?:h[1-6]|div)[^>]*>)\s*(?:<br\s*\/?\s*>\s*)+/gi, '$1');
+  content = content.replace(/(<\/(?:h[1-6]|div|ul|ol|li|p)>)(?:[\t ]*\n?<br[\t ]*\/?>[\t ]*\n?)+/gi, '$1');
+  content = content.replace(/(<(?:h[1-6]|div)[^>]*>)(?:[\t ]*\n?<br[\t ]*\/?>[\t ]*\n?)+/gi, '$1');
   // Strip <br> immediately before block elements
-  content = content.replace(/(?:<br\s*\/?\s*>\s*)+\s*(<(?:h[1-6]|div|ul|ol)[^>]*>)/gi, '$1');
+  content = content.replace(/(?:<br[\t ]*\/?>[\t ]*\n?)+[\t ]*(<(?:h[1-6]|div|ul|ol)[^>]*>)/gi, '$1');
 
   return `
     <!DOCTYPE html>
