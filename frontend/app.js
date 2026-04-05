@@ -481,9 +481,10 @@ function convertLatexToHTML(latex) {
   let contactLine = '';
 
   if (nameMatch) {
-    const cleanFirst = nameMatch[1].replace(/\\color\{[^}]*\}/g, '');
-    const cleanLast = nameMatch[2].replace(/\\color\{[^}]*\}/g, '');
-    title = escapeHtml((cleanFirst + ' ' + cleanLast).trim());
+    const cleanFirst = nameMatch[1].replace(/\\color\{[^}]*\}/g, '').trim();
+    const cleanLast = nameMatch[2].replace(/\\color\{[^}]*\}/g, '').trim();
+    // Preserve color for first name — render as teal span
+    title = `<span class="name-first">${escapeHtml(cleanFirst)}</span> ${escapeHtml(cleanLast)}`;
     if (positionMatch) {
       let pos = positionMatch[1];
       pos = pos
@@ -548,6 +549,14 @@ function convertLatexToHTML(latex) {
     .replace(/\\geometry\{[^}]*\}/g, '')
     .replace(/\\thepage/g, '');
 
+  // 4.5. Process LaTeX escape sequences EARLY (before escapeHtml in parseCvEntries)
+  content = content.replace(/\\&/g, '&');
+  content = content.replace(/\\%/g, '%');
+  content = content.replace(/\\#/g, '#');
+  content = content.replace(/\\\$/g, '$');
+  content = content.replace(/\\_/g, '_');
+  content = content.replace(/\\~/g, '~');
+
   // 5. Handle \href{url}{text} → link
   content = content.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, url, text) => {
     const safeUrl = escapeHtml(url);
@@ -574,10 +583,12 @@ function convertLatexToHTML(latex) {
     return `<div style="padding: 1em; background: #f0f0f0; border: 1px dashed #ccc; text-align: center; color: #666;">[Image: ${safeFilename}]</div>`;
   });
 
-  // 7. CV-class section heading
+  // 7. CV-class section heading — title-case with extending line
   content = content.replace(/\\cvsection\{([^}]*)\}/g, (_, s) => {
-    const clean = s.replace(/\\color\{[^}]*\}/g, '');
-    return `<h2 class="cv-section">${escapeHtml(clean)}</h2>`;
+    const clean = s.replace(/\\color\{[^}]*\}/g, '').trim();
+    // Title-case: capitalize first letter of each word
+    const titleCase = clean.replace(/\b\w/g, c => c.toUpperCase());
+    return `<h2 class="cv-section">${escapeHtml(titleCase)}</h2>`;
   });
 
   // 8. Parse \cventry with 5 balanced-brace arguments
@@ -630,13 +641,8 @@ function convertLatexToHTML(latex) {
   // Only strip { } that aren't inside HTML tags
   content = content.replace(/\{([^{}]*)\}/g, '$1');
 
-  // 15. Clean up LaTeX escape sequences
+  // 15. Clean up remaining escaped percent (any that survived)
   content = content.replace(/\\%/g, '%');
-  content = content.replace(/\\&/g, '&amp;');
-  content = content.replace(/\\#/g, '#');
-  content = content.replace(/\\\$/g, '$');
-  content = content.replace(/\\_/g, '_');
-  content = content.replace(/\\~/g, '~');
 
   // 16. Collapse excessive whitespace — remove runs of <br> tags with only whitespace
   content = content.replace(/(<br\s*\/?>[\s]*){3,}/gi, '<br><br>');
@@ -652,10 +658,10 @@ function convertLatexToHTML(latex) {
 
         body {
           font-family: 'Source Serif 4', Georgia, serif;
-          font-size: 12pt;
-          line-height: 1.5;
+          font-size: 10pt;
+          line-height: 1.45;
           max-width: 8.5in;
-          margin: 0.6in auto;
+          margin: 0.4in auto;
           padding: 0 0.5in;
           color: #2A2724;
           background: white;
@@ -664,22 +670,29 @@ function convertLatexToHTML(latex) {
         h1, h2, h3, h4 {
           font-family: 'Merriweather', Georgia, serif;
           font-weight: 700;
-          margin-top: 0.8em;
-          margin-bottom: 0.3em;
-          line-height: 1.3;
+          margin-top: 0.6em;
+          margin-bottom: 0.15em;
+          line-height: 1.2;
         }
 
-        h1 { font-size: 22pt; text-align: center; margin-top: 0.3em; margin-bottom: 0.1em; }
-        h2 { font-size: 16pt; border-bottom: 1px solid #D4CEC0; padding-bottom: 0.15em; }
-        h3 { font-size: 13pt; }
-        h4 { font-size: 11pt; }
+        h1 { font-size: 22pt; text-align: center; margin-top: 0.2em; margin-bottom: 0.05em; }
+        h2 { font-size: 14pt; border-bottom: 1px solid #D4CEC0; padding-bottom: 0.1em; }
+        h3 { font-size: 12pt; }
+        h4 { font-size: 10pt; }
+
+        .name-first { color: #4A6E6B; }
 
         .author, .date {
           text-align: center;
-          font-size: 10.5pt;
-          margin-bottom: 0.15em;
+          font-size: 9pt;
+          margin-bottom: 0.1em;
           color: #3A3632;
-          line-height: 1.4;
+          line-height: 1.3;
+        }
+        .author {
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          font-variant: small-caps;
         }
 
         .contact-link {
@@ -701,8 +714,8 @@ function convertLatexToHTML(latex) {
           color: #A39D8F;
         }
 
-        ul, ol { margin: 0.3em 0; padding-left: 2em; }
-        li { margin: 0.15em 0; }
+        ul, ol { margin: 0.2em 0; padding-left: 1.5em; }
+        li { margin: 0.1em 0; font-size: 9.5pt; }
 
         .equation { text-align: center; margin: 1.5em 0; padding: 1em; overflow-x: auto; }
 
@@ -733,36 +746,64 @@ function convertLatexToHTML(latex) {
 
         /* CV-specific styles */
         .cv-section {
-          font-size: 12pt;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
+          display: flex;
+          align-items: center;
+          gap: 0.4em;
+          font-size: 14pt;
+          font-weight: 700;
           color: #4A6E6B;
-          border-bottom: 2px solid #4A6E6B;
-          padding-bottom: 0.15em;
-          margin-top: 0.8em;
-          margin-bottom: 0.4em;
+          border-bottom: none;
+          padding-bottom: 0;
+          margin-top: 0.7em;
+          margin-bottom: 0.3em;
+          text-transform: none;
+          letter-spacing: 0;
+        }
+        .cv-section::after {
+          content: '';
+          flex: 1;
+          height: 1px;
+          background: #B0ACA4;
         }
         .cv-entry { margin-bottom: 0.5em; }
-        .cv-entry-header {
+        .cv-entry-header, .cv-entry-subheader {
           display: flex;
           justify-content: space-between;
           align-items: baseline;
-          flex-wrap: wrap;
-          gap: 0.15em;
+          flex-wrap: nowrap;
+          gap: 0.5em;
         }
-        .cv-entry-role { font-weight: 600; font-size: 10.5pt; }
-        .cv-entry-org { font-size: 10.5pt; color: #3A3632; }
-        .cv-entry-meta { font-size: 9.5pt; color: #666; text-align: right; white-space: nowrap; }
-        .cv-entry-body { margin-top: 0.1em; font-size: 10pt; }
-        .cv-entry-body ul { margin: 0.1em 0; }
-        .cv-entry-body li { margin: 0.05em 0; }
+        .cv-entry-left { flex: 1; min-width: 0; }
+        .cv-entry-right { flex-shrink: 0; text-align: right; font-size: 9pt; color: #555; white-space: nowrap; }
+        .cv-entry-role { font-weight: 700; font-size: 10pt; }
+        .cv-entry-role-link { color: #4A6E6B; font-weight: 700; font-size: 10pt; }
+        .cv-entry-org { font-size: 9.5pt; color: #3A3632; }
+        .cv-entry-body { margin-top: 0.05em; font-size: 9.5pt; }
+        .cv-entry-body ul { margin: 0.05em 0; }
+        .cv-entry-body li { margin: 0.02em 0; }
 
-        .cv-skills { margin-bottom: 0.3em; }
-        .cv-skill { margin: 0.2em 0; font-size: 10.5pt; }
+        .cv-skills { margin-bottom: 0.2em; }
+        .cv-skill {
+          display: flex;
+          align-items: baseline;
+          gap: 0.6em;
+          margin: 0.15em 0;
+          font-size: 9.5pt;
+          line-height: 1.4;
+        }
+        .cv-skill-label {
+          font-weight: 700;
+          white-space: nowrap;
+          text-align: right;
+          min-width: 5em;
+          flex-shrink: 0;
+          color: #2A2724;
+        }
+        .cv-skill-value { flex: 1; }
 
-        .cv-paragraph { margin: 0.3em 0; font-size: 10.5pt; line-height: 1.4; }
-        .cv-items { margin: 0.1em 0; padding-left: 1.5em; }
-        .cv-items li { margin: 0.05em 0; font-size: 10pt; }
+        .cv-paragraph { margin: 0.2em 0; font-size: 9.5pt; line-height: 1.4; }
+        .cv-items { margin: 0.05em 0; padding-left: 1.5em; }
+        .cv-items li { margin: 0.02em 0; font-size: 9.5pt; }
 
         br + br { display: none; }
       </style>
@@ -826,14 +867,21 @@ function parseCvEntries(content) {
       const processedOrg = org.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, u, t) =>
         `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${escapeHtml(t.replace(/\\color\{[^}]*\}/g, ''))}</a>`
       );
-
-      const metaParts = [location, dates].filter(Boolean).map(s => escapeHtml(s.trim()));
+      const processedRole = role.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, u, t) =>
+        `<a href="${escapeHtml(u)}" target="_blank" rel="noopener" class="cv-entry-role-link">${escapeHtml(t.replace(/\\color\{[^}]*\}/g, ''))}</a>`
+      );
+      // If role still has unprocessed text (no href), escape it
+      const roleHtml = processedRole.includes('<a ') ? processedRole.trim() : escapeHtml(role.trim());
 
       const html = `<div class="cv-entry">
         <div class="cv-entry-header">
-          <div><span class="cv-entry-role">${escapeHtml(role.trim())}</span>${org.trim() ? ` — <span class="cv-entry-org">${processedOrg.trim()}</span>` : ''}</div>
-          ${metaParts.length ? `<div class="cv-entry-meta">${metaParts.join(' | ')}</div>` : ''}
+          <div class="cv-entry-left"><span class="cv-entry-role">${roleHtml}</span></div>
+          ${location.trim() ? `<div class="cv-entry-right"><em>${escapeHtml(location.trim())}</em></div>` : ''}
         </div>
+        ${org.trim() || dates.trim() ? `<div class="cv-entry-subheader">
+          <div class="cv-entry-left"><span class="cv-entry-org">${processedOrg.trim()}</span></div>
+          ${dates.trim() ? `<div class="cv-entry-right"><em>${escapeHtml(dates.trim())}</em></div>` : ''}
+        </div>` : ''}
         <div class="cv-entry-body">${body}</div>
       </div>`;
       replacements.push({ start: startPos, end: pos, html });
@@ -873,7 +921,7 @@ function parseCvSkills(content) {
     if (args.length >= 2) {
       const cat = args[0].replace(/\\color\{[^}]*\}/g, '').trim();
       const skills = args[1].replace(/\\color\{[^}]*\}/g, '').trim();
-      const html = `<div class="cv-skill"><strong>${escapeHtml(cat)}</strong>: ${escapeHtml(skills)}</div>`;
+      const html = `<div class="cv-skill"><span class="cv-skill-label">${escapeHtml(cat)}</span><span class="cv-skill-value">${escapeHtml(skills)}</span></div>`;
       replacements.push({ start: startPos, end: pos, html });
     }
   }
