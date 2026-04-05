@@ -121,13 +121,20 @@ const state = {
   pdfData: null,
   zoom: 1.0,
   isCompiling: false,
+  compileGeneration: 0,
   engine: null,
   lastCompileTime: 0,
   // Multi-file project support
-  projectFiles: {},  // { 'path/to/file.tex': 'content' }
-  currentFile: null, // Currently open file path
-  mainFile: null,    // Main .tex file for compilation
-  projectMode: false // Whether we're in multi-file project mode
+  projectFiles: {},
+  currentFile: null,
+  mainFile: null,
+  projectMode: false,
+  // Backend project tracking
+  currentProjectId: null,
+  currentProjectName: null,
+  // GitHub
+  githubToken: null,
+  githubRepo: null,
 };
 
 // ============================================
@@ -171,7 +178,25 @@ const elements = {
   cleanProjectBtn: document.getElementById('cleanProjectBtn'),
   currentFileName: document.getElementById('currentFileName'),
   newFileBtn: document.getElementById('newFileBtn'),
-  newFolderBtn: document.getElementById('newFolderBtn')
+  newFolderBtn: document.getElementById('newFolderBtn'),
+  // Projects drawer
+  projectsBtn: document.getElementById('projectsBtn'),
+  projectsDrawer: document.getElementById('projectsDrawer'),
+  drawerOverlay: document.getElementById('drawerOverlay'),
+  closeDrawer: document.getElementById('closeDrawer'),
+  projectsList: document.getElementById('projectsList'),
+  drawerGithubBtn: document.getElementById('drawerGithubBtn'),
+  // GitHub modal
+  githubModalOverlay: document.getElementById('githubModalOverlay'),
+  closeGithubModal: document.getElementById('closeGithubModal'),
+  githubToken: document.getElementById('githubToken'),
+  githubRepo: document.getElementById('githubRepo'),
+  githubRepoGroup: document.getElementById('githubRepoGroup'),
+  githubStatus: document.getElementById('githubStatus'),
+  githubSave: document.getElementById('githubSave'),
+  githubDisconnect: document.getElementById('githubDisconnect'),
+  githubPush: document.getElementById('githubPush'),
+  githubPull: document.getElementById('githubPull'),
 };
 
 // ============================================
@@ -180,6 +205,21 @@ const elements = {
 
 async function init() {
   showStatus('Initializing...', 'info');
+  
+  // Migrate: clear ALL oversized localStorage data (now using SQLite backend)
+  // This prevents 431 errors caused by browsers sending large cookies
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('latexEditor_')) {
+        const val = localStorage.getItem(key);
+        if (val && val.length > 50000) {
+          localStorage.removeItem(key);
+          console.info(`Cleared oversized localStorage key: ${key} (${val.length} chars)`);
+        }
+      }
+    }
+  } catch (e) { /* ignore */ }
   
   // Initialize editor
   initializeEditor();
@@ -323,6 +363,42 @@ function initializeEventListeners() {
   elements.closeError.addEventListener('click', () => hideToast('error'));
   elements.closeSuccess.addEventListener('click', () => hideToast('success'));
   
+  // Projects drawer
+  if (elements.projectsBtn) {
+    elements.projectsBtn.addEventListener('click', openProjectsDrawer);
+  }
+  if (elements.closeDrawer) {
+    elements.closeDrawer.addEventListener('click', closeProjectsDrawer);
+  }
+  if (elements.drawerOverlay) {
+    elements.drawerOverlay.addEventListener('click', closeProjectsDrawer);
+  }
+
+  // GitHub modal
+  if (elements.drawerGithubBtn) {
+    elements.drawerGithubBtn.addEventListener('click', openGithubModal);
+  }
+  if (elements.closeGithubModal) {
+    elements.closeGithubModal.addEventListener('click', closeGithubModal);
+  }
+  if (elements.githubModalOverlay) {
+    elements.githubModalOverlay.addEventListener('click', (e) => {
+      if (e.target === elements.githubModalOverlay) closeGithubModal();
+    });
+  }
+  if (elements.githubSave) {
+    elements.githubSave.addEventListener('click', connectGithub);
+  }
+  if (elements.githubDisconnect) {
+    elements.githubDisconnect.addEventListener('click', disconnectGithub);
+  }
+  if (elements.githubPush) {
+    elements.githubPush.addEventListener('click', pushToGithub);
+  }
+  if (elements.githubPull) {
+    elements.githubPull.addEventListener('click', pullFromGithub);
+  }
+
   // Save to localStorage on unload
   window.addEventListener('beforeunload', saveToLocalStorage);
 }
@@ -340,6 +416,7 @@ function handleEditorChange(e) {
   }
   
   saveToLocalStorage();
+  scheduleBackendSave();
 }
 
 function updateCursorPosition() {
@@ -363,7 +440,16 @@ async function compile(isInitial = false) {
   }
   
   state.isCompiling = true;
-  showLoading('Compiling LaTeX...');
+  state.compileGeneration++;
+  const generation = state.compileGeneration;
+
+  // Delayed loading indicator — only show if compile takes >300ms
+  const loadingTimer = setTimeout(() => {
+    if (state.isCompiling) {
+      showLoading('Compiling LaTeX...');
+    }
+  }, 300);
+
   showStatus('Compiling...', 'info');
   
   const startTime = Date.now();
@@ -383,14 +469,31 @@ async function compile(isInitial = false) {
       latexContent = resolveIncludes(latexContent, state.mainFile);
     }
     
+    // Validate LaTeX syntax before compilation
+    const validationErrors = validateLatexSyntax(latexContent);
+    if (validationErrors.length > 0) {
+      clearTimeout(loadingTimer);
+      hideLoading();
+      state.isCompiling = false;
+      const errorMsg = validationErrors.map(e => `Line ${e.line}: ${e.message}`).join('\n');
+      showErrorToast(validationErrors[0].message + (validationErrors.length > 1 ? ` (+${validationErrors.length - 1} more)` : ''));
+      showStatus(`${validationErrors.length} error(s) found`, 'error');
+      console.error('LaTeX validation errors:\n' + errorMsg);
+      return;
+    }
+
     // Use a simple LaTeX to HTML converter for demo purposes
     // In production, you would use SwiftLaTeX or similar
-    const pdfBlob = await compileLatexToBlob(latexContent);
+    const htmlContent = await compileLatexToBlob(latexContent);
+
+    // Stale check — a newer compile was triggered while we were working
+    if (generation !== state.compileGeneration) return;
     
-    state.pdfData = pdfBlob;
+    state.pdfData = htmlContent;
     state.lastCompileTime = Date.now() - startTime;
+    state.lastHtmlContent = htmlContent;
     
-    await renderPDF(pdfBlob);
+    renderPDF(htmlContent, generation);
     
     showStatus(`Compiled successfully (${state.lastCompileTime}ms)`, 'success');
     showSuccessToast(`Document compiled in ${state.lastCompileTime}ms`);
@@ -400,117 +503,323 @@ async function compile(isInitial = false) {
     showStatus('Compilation failed', 'error');
     showErrorToast(error.message || 'Failed to compile LaTeX document');
   } finally {
+    clearTimeout(loadingTimer);
     state.isCompiling = false;
     hideLoading();
   }
 }
 
 /**
- * Compile LaTeX to PDF blob
- * This is a simplified version - in production, use SwiftLaTeX or similar
+ * Compile LaTeX to an HTML string for preview.
  */
 async function compileLatexToBlob(latex) {
-  // For this demo, we'll create a simple PDF using a library
-  // In production, you would use SwiftLaTeX WebAssembly engine
-  
   try {
-    // Create a simple HTML representation
-    const htmlContent = convertLatexToHTML(latex);
-    
-    // Create PDF using browser's print functionality
-    const blob = await createPDFFromHTML(htmlContent);
-    
-    return blob;
+    return convertLatexToHTML(latex);
   } catch (error) {
     throw new Error('Failed to compile LaTeX: ' + error.message);
   }
 }
 
 /**
- * Simple LaTeX to HTML converter (simplified)
- * In production, use a proper LaTeX parser
+ * Extract a balanced brace group from str starting at startPos.
+ * Returns { value, end } where value is the content inside {} and end is the
+ * position right after the closing brace, or null if not found.
+ */
+function extractBraceGroup(str, startPos) {
+  let pos = str.indexOf('{', startPos);
+  if (pos === -1) return null;
+  let depth = 0;
+  const start = pos + 1;
+  for (let i = pos; i < str.length; i++) {
+    if (str[i] === '{') depth++;
+    else if (str[i] === '}') {
+      depth--;
+      if (depth === 0) return { value: str.substring(start, i), end: i + 1 };
+    }
+  }
+  return null;
+}
+
+/**
+ * Validate LaTeX syntax and return errors.
+ * Detects common mistakes like missing backslashes before commands.
+ */
+function validateLatexSyntax(latex) {
+  const errors = [];
+  const lines = latex.split('\n');
+
+  // Known LaTeX commands that require a leading backslash
+  const knownCommands = [
+    'documentclass', 'usepackage', 'begin', 'end', 'title', 'author', 'date',
+    'maketitle', 'section', 'subsection', 'subsubsection', 'textbf', 'textit',
+    'texttt', 'emph', 'href', 'includegraphics', 'input', 'include',
+    'newcommand', 'renewcommand', 'newenvironment',
+    'name', 'position', 'email', 'github', 'linkedin', 'medium', 'bluesky',
+    'cvsection', 'cventry', 'cvskill', 'cvparagraph',
+    'makecvheader', 'makecvfooter', 'fontdir', 'colorlet', 'setbool',
+    'geometry', 'linespread', 'definecolor', 'color',
+    'item', 'label', 'ref', 'cite', 'bibliography', 'bibliographystyle',
+    'footnote', 'caption', 'centering', 'noindent',
+    'vspace', 'hspace', 'newpage', 'clearpage', 'pagebreak',
+  ];
+
+  const commandPattern = new RegExp(
+    '(?:^|[^a-zA-Z\\\\])(' + knownCommands.join('|') + ')\\s*[{\\[]',
+    'gm'
+  );
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
+
+    // Skip comment lines
+    if (/^\s*%/.test(line)) continue;
+
+    // Strip inline comments for analysis
+    const activeLine = line.replace(/([^\\])%.*$/, '$1');
+
+    // Check for known commands without leading backslash
+    let match;
+    commandPattern.lastIndex = 0;
+    while ((match = commandPattern.exec(activeLine)) !== null) {
+      const cmd = match[1];
+      const pos = match.index + match[0].indexOf(cmd);
+
+      // Check if preceded by a backslash
+      if (pos > 0 && activeLine[pos - 1] === '\\') continue;
+
+      errors.push({
+        line: lineNum,
+        column: pos + 1,
+        command: cmd,
+        message: `Missing backslash: "${cmd}{" should be "\\${cmd}{" (line ${lineNum})`,
+        suggestion: `\\${cmd}`,
+      });
+    }
+
+    // Check for unmatched \begin without corresponding \end (basic check)
+    const begins = (activeLine.match(/\\begin\{([^}]+)\}/g) || []);
+    for (const b of begins) {
+      const envName = b.match(/\\begin\{([^}]+)\}/)[1];
+      // Only flag if the entire document doesn't have a matching \end
+      const endPattern = new RegExp(`\\\\end\\{${envName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`);
+      if (!endPattern.test(latex)) {
+        errors.push({
+          line: lineNum,
+          column: activeLine.indexOf(b) + 1,
+          command: 'begin',
+          message: `Unmatched \\begin{${envName}} — missing \\end{${envName}} (line ${lineNum})`,
+          suggestion: `\\end{${envName}}`,
+        });
+      }
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * Convert LaTeX to HTML.
+ * Handles standard article commands plus CV-class commands
+ * (\cvsection, \cventry, \cvskill, \cvparagraph, etc.)
  */
 function convertLatexToHTML(latex) {
-  // Extract content between \begin{document} and \end{document}
-  const docMatch = latex.match(/\\begin{document}([\s\S]*?)\\end{document}/);
+  // 1. Strip LaTeX comments (% to end-of-line) but preserve escaped \%
+  latex = latex.replace(/^%.*$/gm, '');
+  latex = latex.replace(/([^\\])%.*$/gm, '$1');
+
+  // 2. Extract metadata from preamble (before \begin{document})
+  // Use pattern that handles one level of nested braces: (?:[^{}]|\{[^}]*\})*
+  const NB = '(?:[^{}]|\\{[^}]*\\})*'; // nested-brace-safe capture pattern
+  const titleMatch = latex.match(new RegExp(`\\\\title\\{(${NB})\\}`));
+  const authorMatch = latex.match(new RegExp(`\\\\author\\{(${NB})\\}`));
+  const dateMatch = latex.match(new RegExp(`\\\\date\\{(${NB})\\}`));
+
+  // CV-class personal info (handles \color{x} inside arguments)
+  const nameMatch = latex.match(new RegExp(`\\\\name\\{(${NB})\\}\\{(${NB})\\}`));
+  const positionMatch = latex.match(new RegExp(`\\\\position\\{(${NB})\\}`));
+  const emailMatch = latex.match(/\\email\{([^}]*)\}/);
+  const githubMatch = latex.match(/\\github\{([^}]*)\}/);
+  const linkedinMatch = latex.match(/\\linkedin\{([^}]*)\}/);
+  const mediumMatch = latex.match(/\\medium\{([^}]*)\}/);
+
+  let title = '';
+  let subtitle = '';
+  let contactLine = '';
+
+  if (nameMatch) {
+    const cleanFirst = nameMatch[1].replace(/\\color\{[^}]*\}/g, '').trim();
+    const cleanLast = nameMatch[2].replace(/\\color\{[^}]*\}/g, '').trim();
+    // Preserve color for first name — render as teal span
+    title = `<span class="name-first">${escapeHtml(cleanFirst)}</span> ${escapeHtml(cleanLast)}`;
+    if (positionMatch) {
+      let pos = positionMatch[1];
+      pos = pos
+        .replace(/\{\\enskip\\cdotp\\enskip\}/g, ' · ')
+        .replace(/\\enskip\\cdotp\\enskip/g, ' · ')
+        .replace(/\\enskip/g, ' ')
+        .replace(/\\cdotp/g, '·')
+        .replace(/\\color\{[^}]*\}/g, '')
+        .replace(/\{([^{}]*)\}/g, '$1');
+      subtitle = escapeHtml(pos.trim());
+    }
+    // Build contact links with inline SVG icons
+    const contactParts = [];
+    if (emailMatch) {
+      const e = escapeHtml(emailMatch[1]);
+      contactParts.push(`<a href="mailto:${e}" class="contact-link"><svg class="contact-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>${e}</a>`);
+    }
+    if (githubMatch) {
+      const g = escapeHtml(githubMatch[1]);
+      contactParts.push(`<a href="https://github.com/${g}" target="_blank" rel="noopener" class="contact-link"><svg class="contact-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>${g}</a>`);
+    }
+    if (linkedinMatch) {
+      const l = escapeHtml(linkedinMatch[1]);
+      contactParts.push(`<a href="https://linkedin.com/in/${l}" target="_blank" rel="noopener" class="contact-link"><svg class="contact-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>${l}</a>`);
+    }
+    if (mediumMatch) {
+      const m = escapeHtml(mediumMatch[1]);
+      contactParts.push(`<a href="https://medium.com/@${m}" target="_blank" rel="noopener" class="contact-link"><svg class="contact-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M13.54 12a6.8 6.8 0 0 1-6.77 6.82A6.8 6.8 0 0 1 0 12a6.8 6.8 0 0 1 6.77-6.82A6.8 6.8 0 0 1 13.54 12zm7.42 0c0 3.54-1.51 6.42-3.38 6.42-1.87 0-3.39-2.88-3.39-6.42s1.52-6.42 3.39-6.42 3.38 2.88 3.38 6.42M24 12c0 3.17-.53 5.75-1.19 5.75-.66 0-1.19-2.58-1.19-5.75s.53-5.75 1.19-5.75C23.47 6.25 24 8.83 24 12z"/></svg>@${m}</a>`);
+    }
+    if (contactParts.length) contactLine = contactParts.join('<span class="contact-sep">|</span>');
+  } else {
+    title = titleMatch ? escapeHtml(titleMatch[1]) : '';
+    subtitle = authorMatch ? escapeHtml(authorMatch[1]) : '';
+    contactLine = dateMatch
+      ? escapeHtml(dateMatch[1].replace('\\today', new Date().toLocaleDateString()))
+      : '';
+  }
+
+  // 3. Extract document body
+  const docMatch = latex.match(/\\begin\{document\}([\s\S]*?)\\end\{document\}/);
   let content = docMatch ? docMatch[1] : latex;
-  
-  // Extract title, author, date
-  const titleMatch = latex.match(/\\title{([^}]*)}/);
-  const authorMatch = latex.match(/\\author{([^}]*)}/);
-  const dateMatch = latex.match(/\\date{([^}]*)}/);
-  
-  const title = titleMatch ? titleMatch[1] : '';
-  const author = authorMatch ? authorMatch[1] : '';
-  const date = dateMatch ? dateMatch[1].replace('\\today', new Date().toLocaleDateString()) : '';
-  
-  // Handle includegraphics - convert to embedded images with base64 data
+
+  // 4. Strip commands that produce no visible output
+  content = content
+    .replace(/\\makecvheader\b/g, '')
+    .replace(/\\makecvfooter[\s\S]*?\{\\thepage\}/g, '')
+    .replace(/\\makecvfooter\b/g, '')
+    .replace(/\\maketitle/g, '')
+    .replace(/\\vspace\*?\{[^}]*\}/g, '')
+    .replace(/\\hspace\*?\{[^}]*\}/g, '')
+    .replace(/\\vfill/g, '')
+    .replace(/\\newpage/g, '')
+    .replace(/\\clearpage/g, '')
+    .replace(/\\pagebreak/g, '')
+    .replace(/\\noindent/g, '')
+    .replace(/\\centering/g, '')
+    .replace(/\\fontdir(\[[^\]]*\])?\{[^}]*\}/g, '')
+    .replace(/\\colorlet\{[^}]*\}\{[^}]*\}/g, '')
+    .replace(/\\setbool\{[^}]*\}\{[^}]*\}/g, '')
+    .replace(/\\renewcommand\{[^}]*\}\{[^}]*\}/g, '')
+    .replace(/\\linespread\{[^}]*\}/g, '')
+    .replace(/\\geometry\{[^}]*\}/g, '')
+    .replace(/\\thepage/g, '');
+
+  // 4.5. Process LaTeX escape sequences EARLY (before escapeHtml in parseCvEntries)
+  content = content.replace(/\\&/g, '&');
+  content = content.replace(/\\%/g, '%');
+  content = content.replace(/\\#/g, '#');
+  content = content.replace(/\\\$/g, '$');
+  content = content.replace(/\\_/g, '_');
+  content = content.replace(/\\~/g, '~');
+
+  // 5. Handle \href{url}{text} → link
+  content = content.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, url, text) => {
+    const safeUrl = escapeHtml(url);
+    const cleanText = text.replace(/\\color\{[^}]*\}/g, '');
+    return `<a href="${safeUrl}" target="_blank" rel="noopener">${escapeHtml(cleanText)}</a>`;
+  });
+
+  // 6. Handle includegraphics
   content = content.replace(/\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}/g, (match, filename) => {
-    // Try to find the image in project files
+    const safeFilename = escapeHtml(filename);
     if (state.projectMode && state.projectFiles) {
-      // Try exact path first, then with common extensions
       const extensions = ['', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.pdf'];
       for (const ext of extensions) {
         const imgPath = filename + ext;
         const imgData = state.projectFiles[imgPath];
         if (isBinaryContent(imgData)) {
-          // Determine mime type
           const actualExt = imgPath.split('.').pop().toLowerCase();
-          const mimeTypes = {
-            'png': 'image/png',
-            'jpg': 'image/jpeg',
-            'jpeg': 'image/jpeg',
-            'gif': 'image/gif',
-            'svg': 'image/svg+xml'
-          };
+          const mimeTypes = { 'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'gif': 'image/gif', 'svg': 'image/svg+xml' };
           const mimeType = mimeTypes[actualExt] || 'application/octet-stream';
-          return `<img src="data:${mimeType};base64,${imgData.content}" alt="${filename}" style="max-width: 100%; height: auto;">`;
+          return `<img src="data:${escapeHtml(mimeType)};base64,${imgData.content}" alt="${safeFilename}" style="max-width: 100%; height: auto;">`;
         }
       }
     }
-    // Return placeholder if image not found
-    return `<div style="padding: 1em; background: #f0f0f0; border: 1px dashed #ccc; text-align: center; color: #666;">[Image: ${filename}]</div>`;
+    return `<div style="padding: 1em; background: #f0f0f0; border: 1px dashed #ccc; text-align: center; color: #666;">[Image: ${safeFilename}]</div>`;
   });
-  
-  // Basic conversions
+
+  // 7. CV-class section heading — title-case with extending line
+  content = content.replace(/\\cvsection\{([^}]*)\}/g, (_, s) => {
+    const clean = s.replace(/\\color\{[^}]*\}/g, '').trim();
+    // Title-case: capitalize first letter of each word
+    const titleCase = clean.replace(/\b\w/g, c => c.toUpperCase());
+    return `<h2 class="cv-section">${escapeHtml(titleCase)}</h2>`;
+  });
+
+  // 8. Parse \cventry with 5 balanced-brace arguments
+  content = parseCvEntries(content);
+
+  // 9. Parse \cvskill with balanced-brace arguments
+  content = parseCvSkills(content);
+
+  // 10. CV environments → simple containers
   content = content
-    // Sections
-    .replace(/\\section\*?{([^}]*)}/g, '<h2>$1</h2>')
-    .replace(/\\subsection\*?{([^}]*)}/g, '<h3>$1</h3>')
-    .replace(/\\subsubsection\*?{([^}]*)}/g, '<h4>$1</h4>')
-    // Text formatting
-    .replace(/\\textbf{([^}]*)}/g, '<strong>$1</strong>')
-    .replace(/\\textit{([^}]*)}/g, '<em>$1</em>')
-    .replace(/\\texttt{([^}]*)}/g, '<code>$1</code>')
-    .replace(/\\emph{([^}]*)}/g, '<em>$1</em>')
-    // Lists
-    .replace(/\\begin{itemize}/g, '<ul>')
-    .replace(/\\end{itemize}/g, '</ul>')
-    .replace(/\\begin{enumerate}/g, '<ol>')
-    .replace(/\\end{enumerate}/g, '</ol>')
-    .replace(/\\item\s+/g, '<li>')
-    // Math equations - preserve for MathJax
-    .replace(/\\begin{equation}/g, '\\[')
-    .replace(/\\end{equation}/g, '\\]')
-    .replace(/\\begin{align\*?}/g, '\\[\\begin{aligned}')
-    .replace(/\\end{align\*?}/g, '\\end{aligned}\\]')
-    // Verbatim
-    .replace(/\\begin{verbatim}([\s\S]*?)\\end{verbatim}/g, '<pre>$1</pre>')
-    // Maketitle
-    .replace(/\\maketitle/, '');
-  
-  // Clean up remaining simple LaTeX commands (but preserve math)
+    .replace(/\\begin\{cventries\}/g, '<div class="cv-entries">')
+    .replace(/\\end\{cventries\}/g, '</div>')
+    .replace(/\\begin\{cvskills\}/g, '<div class="cv-skills">')
+    .replace(/\\end\{cvskills\}/g, '</div>')
+    .replace(/\\begin\{cvparagraph\}/g, '<div class="cv-paragraph">')
+    .replace(/\\end\{cvparagraph\}/g, '</div>')
+    .replace(/\\begin\{cvitems\}/g, '<ul class="cv-items">')
+    .replace(/\\end\{cvitems\}/g, '</ul>');
+
+  // 11. Standard LaTeX conversions
+  content = content
+    .replace(/\\section\*?\{([^}]*)\}/g, (_, s) => `<h2>${escapeHtml(s)}</h2>`)
+    .replace(/\\subsection\*?\{([^}]*)\}/g, (_, s) => `<h3>${escapeHtml(s)}</h3>`)
+    .replace(/\\subsubsection\*?\{([^}]*)\}/g, (_, s) => `<h4>${escapeHtml(s)}</h4>`)
+    .replace(/\\textbf\{([^}]*)\}/g, (_, s) => `<strong>${escapeHtml(s)}</strong>`)
+    .replace(/\\textit\{([^}]*)\}/g, (_, s) => `<em>${escapeHtml(s)}</em>`)
+    .replace(/\\texttt\{([^}]*)\}/g, (_, s) => `<code>${escapeHtml(s)}</code>`)
+    .replace(/\\emph\{([^}]*)\}/g, (_, s) => `<em>${escapeHtml(s)}</em>`)
+    .replace(/\\begin\{itemize\}/g, '<ul>')
+    .replace(/\\end\{itemize\}/g, '</ul>')
+    .replace(/\\begin\{enumerate\}/g, '<ol>')
+    .replace(/\\end\{enumerate\}/g, '</ol>')
+    .replace(/\\item\s*/g, '<li>')
+    .replace(/\\begin\{equation\}/g, '\\[')
+    .replace(/\\end\{equation\}/g, '\\]')
+    .replace(/\\begin\{align\*?\}/g, '\\[\\begin{aligned}')
+    .replace(/\\end\{align\*?\}/g, '\\end{aligned}\\]')
+    .replace(/\\begin\{verbatim\}([\s\S]*?)\\end\{verbatim\}/g, (_, s) => `<pre>${escapeHtml(s)}</pre>`);
+
+  // 12. Strip \color{...} commands (keep surrounding text)
+  content = content.replace(/\\color\{[^}]*\}/g, '');
+
+  // 13. Clean up remaining unknown commands (preserve math-related ones)
   content = content.replace(/\\([a-zA-Z]+)(\{([^}]*)\})?/g, (match, cmd, full, arg) => {
-    // Preserve math-related commands using the whitelist
-    if (LATEX_MATH_COMMANDS.includes(cmd)) {
-      return match;
-    }
+    if (LATEX_MATH_COMMANDS.includes(cmd)) return match;
     return arg || '';
   });
-  
-  // Add line breaks
-  content = content.replace(/\n\n+/g, '<br><br>');
-  
+
+  // 14. Remove stray bare braces (LaTeX grouping braces that aren't part of HTML tags)
+  // Only strip { } that aren't inside HTML tags
+  content = content.replace(/\{([^{}]*)\}/g, '$1');
+
+  // 15. Clean up remaining escaped percent (any that survived)
+  content = content.replace(/\\%/g, '%');
+
+  // 16. Collapse excessive whitespace — remove runs of <br> tags with only whitespace
+  content = content.replace(/(?:<br\s*\/?\s*>[\t ]*\n?){3,}/gi, '<br>');
+  content = content.replace(/\n\n+/g, '<br>');
+  // Strip <br> immediately after block elements (sections, divs, headings)
+  content = content.replace(/(<\/(?:h[1-6]|div|ul|ol|li|p)>)(?:[\t ]*\n?<br[\t ]*\/?>[\t ]*\n?)+/gi, '$1');
+  content = content.replace(/(<(?:h[1-6]|div)[^>]*>)(?:[\t ]*\n?<br[\t ]*\/?>[\t ]*\n?)+/gi, '$1');
+  // Strip <br> immediately before block elements
+  content = content.replace(/(?:<br[\t ]*\/?>[\t ]*\n?)+[\t ]*(<(?:h[1-6]|div|ul|ol)[^>]*>)/gi, '$1');
+
   return `
     <!DOCTYPE html>
     <html>
@@ -518,54 +827,70 @@ function convertLatexToHTML(latex) {
       <meta charset="utf-8">
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Source+Serif+4:wght@300;400;600&display=swap');
-        
+
         body {
           font-family: 'Source Serif 4', Georgia, serif;
-          font-size: 12pt;
-          line-height: 1.6;
+          font-size: 10pt;
+          line-height: 1.45;
           max-width: 8.5in;
-          margin: 1in auto;
+          margin: 0.4in auto;
           padding: 0 0.5in;
           color: #2A2724;
           background: white;
         }
-        
+
         h1, h2, h3, h4 {
           font-family: 'Merriweather', Georgia, serif;
           font-weight: 700;
-          margin-top: 1.5em;
-          margin-bottom: 0.5em;
-          line-height: 1.3;
+          margin-top: 0.6em;
+          margin-bottom: 0.15em;
+          line-height: 1.2;
         }
-        
-        h1 { font-size: 24pt; text-align: center; margin-bottom: 0.25em; }
-        h2 { font-size: 18pt; border-bottom: 1px solid #D4CEC0; padding-bottom: 0.25em; }
-        h3 { font-size: 14pt; }
-        h4 { font-size: 12pt; }
-        
+
+        h1 { font-size: 22pt; text-align: center; margin-top: 0.2em; margin-bottom: 0.05em; }
+        h2 { font-size: 14pt; border-bottom: 1px solid #D4CEC0; padding-bottom: 0.1em; }
+        h3 { font-size: 12pt; }
+        h4 { font-size: 10pt; }
+
+        .name-first { color: #4A6E6B; }
+
         .author, .date {
           text-align: center;
-          font-size: 11pt;
-          margin-bottom: 0.25em;
+          font-size: 9pt;
+          margin-bottom: 0.1em;
           color: #3A3632;
+          line-height: 1.3;
         }
-        
-        ul, ol {
-          margin: 1em 0;
-          padding-left: 2em;
+        .author {
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          font-variant: small-caps;
         }
-        
-        li {
-          margin: 0.5em 0;
+
+        .contact-link {
+          color: #4A6E6B;
+          text-decoration: none;
+          display: inline-flex;
+          align-items: center;
+          gap: 0.2em;
         }
-        
-        .equation {
-          text-align: center;
-          margin: 1.5em 0;
-          padding: 1em;
-          overflow-x: auto;
+        .contact-link:hover { text-decoration: underline; }
+        .contact-icon {
+          width: 0.85em;
+          height: 0.85em;
+          flex-shrink: 0;
+          vertical-align: middle;
         }
-        
+        .contact-sep {
+          margin: 0 0.4em;
+          color: #A39D8F;
+        }
+
+        ul, ol { margin: 0.2em 0; padding-left: 1.5em; }
+        li { margin: 0.1em 0; font-size: 9.5pt; }
+
+        .equation { text-align: center; margin: 1.5em 0; padding: 1em; overflow-x: auto; }
+
         pre {
           font-family: 'JetBrains Mono', 'Courier New', monospace;
           font-size: 10pt;
@@ -575,7 +900,7 @@ function convertLatexToHTML(latex) {
           overflow-x: auto;
           line-height: 1.5;
         }
-        
+
         code {
           font-family: 'JetBrains Mono', 'Courier New', monospace;
           font-size: 10pt;
@@ -583,22 +908,78 @@ function convertLatexToHTML(latex) {
           padding: 0.125em 0.375em;
           border-radius: 2px;
         }
-        
-        strong {
-          font-weight: 600;
+
+        strong { font-weight: 600; }
+        em { font-style: italic; }
+        a { color: #4A6E6B; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        mjx-container { margin: 1em 0; }
+
+        /* CV-specific styles */
+        .cv-section {
+          display: flex;
+          align-items: center;
+          gap: 0.4em;
+          font-size: 14pt;
+          font-weight: 700;
+          color: #4A6E6B;
+          border-bottom: none;
+          padding-bottom: 0;
+          margin-top: 0.6em;
+          margin-bottom: 0.1em;
+          text-transform: none;
+          letter-spacing: 0;
         }
-        
-        em {
-          font-style: italic;
+        .cv-section::after {
+          content: '';
+          flex: 1;
+          height: 1px;
+          background: #B0ACA4;
         }
-        
-        /* MathJax styling */
-        mjx-container {
-          margin: 1em 0;
+        .cv-entry { margin-bottom: 0.5em; }
+        .cv-entry-header, .cv-entry-subheader {
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          flex-wrap: nowrap;
+          gap: 0.5em;
         }
+        .cv-entry-left { flex: 1; min-width: 0; }
+        .cv-entry-right { flex-shrink: 0; text-align: right; font-size: 9pt; color: #555; white-space: nowrap; }
+        .cv-entry-role { font-weight: 700; font-size: 10pt; }
+        .cv-entry-role-link { color: #4A6E6B; font-weight: 700; font-size: 10pt; }
+        .cv-entry-org { font-size: 9.5pt; color: #3A3632; }
+        .cv-entry-body { margin-top: 0.05em; font-size: 9.5pt; }
+        .cv-entry-body ul { margin: 0.05em 0; }
+        .cv-entry-body li { margin: 0.02em 0; }
+
+        .cv-skills { margin-bottom: 0.2em; }
+        .cv-skill {
+          display: flex;
+          align-items: baseline;
+          gap: 0.6em;
+          margin: 0.15em 0;
+          font-size: 9.5pt;
+          line-height: 1.4;
+        }
+        .cv-skill-label {
+          font-weight: 700;
+          white-space: nowrap;
+          text-align: right;
+          min-width: 5em;
+          flex-shrink: 0;
+          color: #2A2724;
+        }
+        .cv-skill-value { flex: 1; }
+
+        .cv-paragraph { margin: 0.2em 0; font-size: 9.5pt; line-height: 1.4; }
+        .cv-items { margin: 0.05em 0; padding-left: 1.5em; }
+        .cv-items li { margin: 0.02em 0; font-size: 9.5pt; }
+
+        br + br { display: none; }
       </style>
-      
-      <!-- MathJax for math rendering -->
+
       <script>
         MathJax = {
           tex: {
@@ -616,8 +997,8 @@ function convertLatexToHTML(latex) {
     </head>
     <body>
       ${title ? `<h1>${title}</h1>` : ''}
-      ${author ? `<div class="author">${author}</div>` : ''}
-      ${date ? `<div class="date">${date}</div>` : ''}
+      ${subtitle ? `<div class="author">${subtitle}</div>` : ''}
+      ${contactLine ? `<div class="date">${contactLine}</div>` : ''}
       ${content}
     </body>
     </html>
@@ -625,84 +1006,140 @@ function convertLatexToHTML(latex) {
 }
 
 /**
- * Create PDF from HTML content
+ * Parse \cventry commands with 5 balanced-brace arguments.
+ * Handles nested braces in the 5th argument (which contains \begin{cvitems}...).
  */
-async function createPDFFromHTML(htmlContent) {
-  return new Promise((resolve, reject) => {
-    // Create an iframe to render the HTML
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'absolute';
-    iframe.style.width = '8.5in';
-    iframe.style.height = '11in';
-    iframe.style.left = '-9999px';
-    document.body.appendChild(iframe);
-    
-    const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-    iframeDoc.open();
-    iframeDoc.write(htmlContent);
-    iframeDoc.close();
-    
-    // Wait for content to load
-    iframe.onload = () => {
-      setTimeout(() => {
-        try {
-          // For now, we'll just display the HTML in the preview
-          // In a real implementation, you'd use a library like jsPDF with html2canvas
-          // or better yet, SwiftLaTeX for true LaTeX compilation
-          
-          // Create a blob with the HTML for preview
-          const blob = new Blob([htmlContent], { type: 'text/html' });
-          document.body.removeChild(iframe);
-          resolve(blob);
-        } catch (error) {
-          document.body.removeChild(iframe);
-          reject(error);
-        }
-      }, 500);
-    };
-    
-    iframe.onerror = () => {
-      document.body.removeChild(iframe);
-      reject(new Error('Failed to render HTML'));
-    };
-  });
+function parseCvEntries(content) {
+  const regex = /\\cventry\s*/g;
+  let match;
+  const replacements = [];
+
+  while ((match = regex.exec(content)) !== null) {
+    const startPos = match.index;
+    let pos = match.index + match[0].length;
+
+    const args = [];
+    for (let i = 0; i < 5; i++) {
+      const group = extractBraceGroup(content, pos);
+      if (!group) break;
+      args.push(group.value);
+      pos = group.end;
+      // skip whitespace between arguments
+      while (pos < content.length && /\s/.test(content[pos])) pos++;
+    }
+
+    if (args.length >= 2) {
+      const org = (args[0] || '').replace(/\\color\{[^}]*\}/g, '');
+      const role = (args[1] || '').replace(/\\color\{[^}]*\}/g, '');
+      const location = (args[2] || '').replace(/\\color\{[^}]*\}/g, '');
+      const dates = (args[3] || '').replace(/\\color\{[^}]*\}/g, '');
+      const body = args[4] || '';
+
+      // Process \href inside org/role
+      const processedOrg = org.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, u, t) =>
+        `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${escapeHtml(t.replace(/\\color\{[^}]*\}/g, ''))}</a>`
+      );
+      const processedRole = role.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, u, t) =>
+        `<a href="${escapeHtml(u)}" target="_blank" rel="noopener" class="cv-entry-role-link">${escapeHtml(t.replace(/\\color\{[^}]*\}/g, ''))}</a>`
+      );
+      // If role still has unprocessed text (no href), escape it
+      const roleHtml = processedRole.includes('<a ') ? processedRole.trim() : escapeHtml(role.trim());
+
+      const html = `<div class="cv-entry">
+        <div class="cv-entry-header">
+          <div class="cv-entry-left"><span class="cv-entry-role">${roleHtml}</span></div>
+          ${location.trim() ? `<div class="cv-entry-right"><em>${escapeHtml(location.trim())}</em></div>` : ''}
+        </div>
+        ${org.trim() || dates.trim() ? `<div class="cv-entry-subheader">
+          <div class="cv-entry-left"><span class="cv-entry-org">${processedOrg.trim()}</span></div>
+          ${dates.trim() ? `<div class="cv-entry-right"><em>${escapeHtml(dates.trim())}</em></div>` : ''}
+        </div>` : ''}
+        <div class="cv-entry-body">${body}</div>
+      </div>`;
+      replacements.push({ start: startPos, end: pos, html });
+    }
+  }
+
+  // Apply in reverse to preserve positions
+  for (let i = replacements.length - 1; i >= 0; i--) {
+    const r = replacements[i];
+    content = content.substring(0, r.start) + r.html + content.substring(r.end);
+  }
+
+  return content;
+}
+
+/**
+ * Parse \cvskill commands with 2 balanced-brace arguments.
+ */
+function parseCvSkills(content) {
+  const regex = /\\cvskill\s*/g;
+  let match;
+  const replacements = [];
+
+  while ((match = regex.exec(content)) !== null) {
+    const startPos = match.index;
+    let pos = match.index + match[0].length;
+
+    const args = [];
+    for (let i = 0; i < 2; i++) {
+      const group = extractBraceGroup(content, pos);
+      if (!group) break;
+      args.push(group.value);
+      pos = group.end;
+      while (pos < content.length && /\s/.test(content[pos])) pos++;
+    }
+
+    if (args.length >= 2) {
+      const cat = args[0].replace(/\\color\{[^}]*\}/g, '').trim();
+      const skills = args[1].replace(/\\color\{[^}]*\}/g, '').trim();
+      const html = `<div class="cv-skill"><span class="cv-skill-label">${escapeHtml(cat)}</span><span class="cv-skill-value">${escapeHtml(skills)}</span></div>`;
+      replacements.push({ start: startPos, end: pos, html });
+    }
+  }
+
+  for (let i = replacements.length - 1; i >= 0; i--) {
+    const r = replacements[i];
+    content = content.substring(0, r.start) + r.html + content.substring(r.end);
+  }
+
+  return content;
 }
 
 // ============================================
 // PDF RENDERING
 // ============================================
 
-async function renderPDF(blob) {
-  // Revoke previous blob URL to prevent memory leaks
-  const existingIframe = elements.previewContent.querySelector('iframe');
-  if (existingIframe && existingIframe.dataset.blobUrl) {
-    URL.revokeObjectURL(existingIframe.dataset.blobUrl);
+/**
+ * Render the compiled HTML into the preview panel.
+ * Uses document.write into a fresh iframe — avoids srcdoc/blob onload loops.
+ */
+function renderPDF(htmlString, generation) {
+  // Stale check
+  if (generation !== state.compileGeneration) return;
+
+  // Remove all existing children (old iframes, welcome message)
+  while (elements.previewContent.firstChild) {
+    elements.previewContent.removeChild(elements.previewContent.firstChild);
   }
-  
-  // Convert blob to URL
-  const url = URL.createObjectURL(blob);
-  
-  // Reuse existing iframe if available (only reload src, don't recreate)
-  if (existingIframe) {
-    existingIframe.dataset.blobUrl = url;
-    existingIframe.src = url;
-  } else {
-    // Create an iframe to display the HTML
-    const iframe = document.createElement('iframe');
-    iframe.style.width = '100%';
-    iframe.style.minHeight = '11in';
-    iframe.style.border = 'none';
-    iframe.style.background = 'white';
-    iframe.style.boxShadow = '0 20px 25px rgba(42, 39, 36, 0.1), 0 10px 10px rgba(42, 39, 36, 0.04)';
-    iframe.style.borderRadius = '2px';
-    iframe.dataset.blobUrl = url;
-    iframe.src = url;
-    
-    elements.previewContent.innerHTML = '';
-    elements.previewContent.appendChild(iframe);
-  }
-  
-  // Apply zoom
+
+  // Create a fresh iframe
+  const iframe = document.createElement('iframe');
+  iframe.style.width = '100%';
+  iframe.style.minHeight = '11in';
+  iframe.style.border = 'none';
+  iframe.style.background = 'white';
+  iframe.style.boxShadow = '0 20px 25px rgba(42, 39, 36, 0.1), 0 10px 10px rgba(42, 39, 36, 0.04)';
+  iframe.style.borderRadius = '2px';
+
+  elements.previewContent.appendChild(iframe);
+
+  // Write content directly — no onload needed
+  const doc = iframe.contentDocument || iframe.contentWindow.document;
+  doc.open();
+  doc.write(htmlString);
+  doc.close();
+
   applyZoom();
 }
 
@@ -739,61 +1176,94 @@ function downloadPDF() {
   
   try {
     showLoading('Generating PDF...');
-    
-    // Get the iframe content
-    const iframe = elements.previewContent.querySelector('iframe');
-    if (!iframe) {
-      throw new Error('No preview available');
+
+    // Create a temporary unsandboxed iframe for export rendering
+    // (the preview iframe is sandboxed and blocks parent DOM access)
+    const htmlContent = state.lastHtmlContent;
+    if (!htmlContent) {
+      throw new Error('No compiled content available. Please compile first.');
     }
-    
-    const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-    const iframeBody = iframeDoc.body;
-    
-    // Use html2canvas and jsPDF to generate PDF
-    html2canvas(iframeBody, {
-      scale: 2,
-      useCORS: true,
-      logging: false,
-      backgroundColor: '#ffffff'
-    }).then(canvas => {
-      const imgData = canvas.toDataURL('image/png');
-      
-      // Calculate PDF dimensions
-      const imgWidth = 210; // A4 width in mm
-      const pageHeight = 297; // A4 height in mm
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      let heightLeft = imgHeight;
-      let position = 0;
-      
-      // Create PDF
-      const { jsPDF } = window.jspdf;
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      
-      // Add first page
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-      
-      // Add additional pages if needed
-      while (heightLeft > 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
-      }
-      
-      // Download PDF
-      pdf.save('document.pdf');
-      
+
+    const exportIframe = document.createElement('iframe');
+    exportIframe.style.position = 'absolute';
+    exportIframe.style.width = '8.5in';
+    exportIframe.style.height = '11in';
+    exportIframe.style.left = '-9999px';
+    document.body.appendChild(exportIframe);
+
+    // Attach onload BEFORE writing to avoid race condition
+    exportIframe.onload = () => {
+      setTimeout(() => {
+        try {
+          const exportDoc = exportIframe.contentDocument || exportIframe.contentWindow.document;
+          const exportBody = exportDoc.body;
+
+          html2canvas(exportBody, {
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            backgroundColor: '#ffffff'
+          }).then(canvas => {
+            document.body.removeChild(exportIframe);
+
+            const imgData = canvas.toDataURL('image/png');
+            const imgWidth = 210;
+            const pageHeight = 297;
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            let heightLeft = imgHeight;
+            let position = 0;
+
+            const { jsPDF } = window.jspdf;
+            const pdf = new jsPDF('p', 'mm', 'a4');
+
+            pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+            heightLeft -= pageHeight;
+
+            while (heightLeft > 0) {
+              position = heightLeft - imgHeight;
+              pdf.addPage();
+              pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+              heightLeft -= pageHeight;
+            }
+
+            pdf.save('document.pdf');
+            hideLoading();
+            showSuccessToast('PDF downloaded successfully');
+          }).catch(error => {
+            document.body.removeChild(exportIframe);
+            hideLoading();
+            console.error('PDF generation error:', error);
+
+            const printWindow = window.open('', '_blank');
+            if (printWindow) {
+              printWindow.document.write(htmlContent);
+              printWindow.document.close();
+              printWindow.print();
+              showSuccessToast('Print dialog opened. Save as PDF from print options.');
+            } else {
+              showErrorToast('Failed to generate PDF. Please allow pop-ups and try again.');
+            }
+          });
+        } catch (error) {
+          document.body.removeChild(exportIframe);
+          hideLoading();
+          console.error('PDF export error:', error);
+          showErrorToast('Failed to export PDF: ' + error.message);
+        }
+      }, 500);
+    };
+
+    exportIframe.onerror = () => {
+      document.body.removeChild(exportIframe);
       hideLoading();
-      showSuccessToast('PDF downloaded successfully');
-    }).catch(error => {
-      hideLoading();
-      console.error('PDF generation error:', error);
-      
-      // Fallback to print
-      iframe.contentWindow.print();
-      showSuccessToast('Print dialog opened. Save as PDF from print options.');
-    });
+      showErrorToast('Failed to render content for PDF export');
+    };
+
+    // Write content AFTER attaching onload/onerror handlers
+    const exportDoc = exportIframe.contentDocument || exportIframe.contentWindow.document;
+    exportDoc.open();
+    exportDoc.write(htmlContent);
+    exportDoc.close();
   } catch (error) {
     hideLoading();
     console.error('PDF download error:', error);
@@ -829,11 +1299,18 @@ function newDocument() {
     return;
   }
   
-  // Reset project state
+  // Save current project to backend before switching
+  if (state.projectMode && state.currentProjectId) {
+    saveProjectToBackend();
+  }
+  
+  // Reset project state (keep currentProjectId — project still exists in DB)
   state.projectMode = false;
   state.projectFiles = {};
   state.currentFile = null;
   state.mainFile = null;
+  state.currentProjectId = null;
+  state.currentProjectName = null;
   
   state.currentLatex = DEFAULT_TEMPLATE;
   elements.editor.value = DEFAULT_TEMPLATE;
@@ -867,8 +1344,13 @@ function newProject() {
   if (!projectName) return;
   
   if (state.projectMode && Object.keys(state.projectFiles).length > 0 &&
-      !confirm('Create new project? Current project will be lost.')) {
+      !confirm('Create new project? You will switch away from the current project.')) {
     return;
+  }
+  
+  // Save current project to backend before switching
+  if (state.projectMode && state.currentProjectId) {
+    saveProjectToBackend();
   }
   
   // Create basic project structure
@@ -938,6 +1420,10 @@ This is your new LaTeX project. Edit this file or create new sections.
   // Save project to localStorage
   saveProjectToLocalStorage();
   
+  // Save to backend
+  state.currentProjectName = projectName;
+  saveProjectToBackend();
+  
   showSuccessToast(`Created project: ${projectName}`);
   
   // Compile the new project
@@ -1001,6 +1487,78 @@ function escapeLatex(str) {
 }
 
 /**
+ * Escape HTML special characters to prevent XSS
+ * @param {string} str - The string to escape
+ * @returns {string} - The HTML-safe string
+ */
+function escapeHtml(str) {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * Validate and sanitize a filename or path segment.
+ * Rejects path traversal, control characters, and dangerous patterns.
+ * @param {string} name - The filename to validate
+ * @returns {string|null} - Sanitized name, or null if invalid
+ */
+function sanitizeFilename(name) {
+  if (!name || typeof name !== 'string') return null;
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+
+  // Reject path traversal and path separators; only allow a single filename
+  if (trimmed.includes('..') || trimmed.includes('/') || trimmed.includes('\\')) return null;
+
+  // Reject control characters
+  if (/[\x00-\x1f\x7f]/.test(trimmed)) return null;
+
+  // Reject empty segments (double slashes)
+  if (/\/\//.test(trimmed)) return null;
+
+  // Reject very long names
+  if (trimmed.length > 255) return null;
+
+  return trimmed;
+}
+
+/**
+ * Validate a file path from a ZIP entry or user input.
+ * @param {string} path - The path to validate
+ * @returns {string|null} - Normalized safe path, or null if invalid
+ */
+function sanitizePath(path) {
+  if (!path || typeof path !== 'string') return null;
+
+  // Normalize and trim
+  let normalized = path.trim().replace(/\\/g, '/');
+
+  // Strip leading slashes
+  while (normalized.startsWith('/')) {
+    normalized = normalized.substring(1);
+  }
+
+  // Reject empty
+  if (!normalized) return null;
+
+  // Check each segment
+  const segments = normalized.split('/');
+  for (const seg of segments) {
+    if (!seg || seg === '.' || seg === '..') return null;
+    if (/[\x00-\x1f\x7f]/.test(seg)) return null;
+  }
+
+  if (normalized.length > 1024) return null;
+
+  return normalized;
+}
+
+/**
  * Save current state to localStorage
  */
 function saveToLocalStorage() {
@@ -1018,7 +1576,8 @@ function saveToLocalStorage() {
 }
 
 /**
- * Save project to localStorage with compression
+ * Save project to localStorage.
+ * Strips binary files if the project is too large to fit in localStorage.
  */
 function saveProjectToLocalStorage() {
   if (!state.projectMode) return;
@@ -1027,7 +1586,6 @@ function saveProjectToLocalStorage() {
     // Save current file content first
     if (state.currentFile && state.projectFiles[state.currentFile] !== undefined) {
       const currentContent = state.projectFiles[state.currentFile];
-      // Only update if it's a text file (not binary)
       if (!isBinaryContent(currentContent)) {
         state.projectFiles[state.currentFile] = state.currentLatex;
       }
@@ -1039,15 +1597,40 @@ function saveProjectToLocalStorage() {
       currentFile: state.currentFile
     };
     
-    // Encode and save
-    const encoded = encodeForStorage(JSON.stringify(projectData));
+    // Try saving the full project first
+    let encoded;
+    try {
+      encoded = encodeForStorage(JSON.stringify(projectData));
+      localStorage.setItem('latexEditor_project', encoded);
+      localStorage.setItem('latexEditor_projectMode', 'true');
+      return;
+    } catch (e) {
+      if (e.name !== 'QuotaExceededError') throw e;
+    }
+
+    // Full project too large — save text files only (skip binary/fonts/images)
+    const textOnlyFiles = {};
+    for (const [path, content] of Object.entries(state.projectFiles)) {
+      if (!isBinaryContent(content)) {
+        textOnlyFiles[path] = content;
+      }
+    }
+
+    const lightData = {
+      files: textOnlyFiles,
+      mainFile: state.mainFile,
+      currentFile: state.currentFile,
+      binaryFilesStripped: true
+    };
+
+    encoded = encodeForStorage(JSON.stringify(lightData));
     localStorage.setItem('latexEditor_project', encoded);
     localStorage.setItem('latexEditor_projectMode', 'true');
+    console.warn('Project saved without binary files (fonts/images) due to storage limits.');
   } catch (error) {
     console.error('Failed to save project to localStorage:', error);
-    // If storage quota exceeded, show a warning
     if (error.name === 'QuotaExceededError') {
-      showErrorToast('Storage quota exceeded. Consider downloading your project as ZIP.');
+      showErrorToast('Storage quota exceeded. Download your project as ZIP to keep it safe.');
     }
   }
 }
@@ -1120,7 +1703,11 @@ function loadProjectFromLocalStorage() {
     elements.toggleFileTreeBtn.style.display = 'inline-block';
     elements.downloadZipBtn.style.display = 'inline-block';
     
-    showSuccessToast('Project restored from last session');
+    showSuccessToast(
+      projectData.binaryFilesStripped
+        ? 'Project restored (fonts/images excluded — re-upload ZIP for full project)'
+        : 'Project restored from last session'
+    );
     
     return true;
   } catch (error) {
@@ -1349,6 +1936,11 @@ async function handleZipUpload(event) {
   const file = event.target.files[0];
   if (!file) return;
   
+  // Save current project to backend before loading a new one
+  if (state.projectMode && state.currentProjectId) {
+    await saveProjectToBackend();
+  }
+  
   if (!file.name.endsWith('.zip')) {
     showErrorToast('Please upload a ZIP file');
     return;
@@ -1381,28 +1973,33 @@ async function handleZipUpload(event) {
         skippedCount++;
         continue;
       }
+
+      // Validate and sanitize the file path
+      const safePath = sanitizePath(path);
+      if (!safePath) {
+        skippedCount++;
+        if (DEBUG_MODE) console.log('[ZIP] Rejected unsafe path:', path);
+        continue;
+      }
       
       // Determine if file is binary based on extension
-      const isBinary = BINARY_EXTENSIONS.test(path);
+      const isBinary = BINARY_EXTENSIONS.test(safePath);
       
       if (isBinary) {
-        // Read binary files as base64 to preserve their content
         const base64Content = await zipEntry.async('base64');
-        rawFiles[path] = { isBinary: true, content: base64Content };
+        rawFiles[safePath] = { isBinary: true, content: base64Content };
       } else {
-        // Read text files as string
         const content = await zipEntry.async('string');
-        rawFiles[path] = content;
+        rawFiles[safePath] = content;
       }
       
       // Try to find main .tex file
-      if (path.endsWith('.tex')) {
-        const filename = path.split('/').pop();
-        // Prioritize files with common main document names
+      if (safePath.endsWith('.tex')) {
+        const filename = safePath.split('/').pop();
         if (!mainTexFile || 
             filename.match(/^(main|document|thesis|paper|article)\.tex$/i) ||
-            path === filename) { // Root level .tex file
-          mainTexFile = path;
+            safePath === filename) {
+          mainTexFile = safePath;
         }
       }
     }
@@ -1480,6 +2077,40 @@ async function handleZipUpload(event) {
     
     // Auto-save project to localStorage after loading
     saveProjectToLocalStorage();
+    
+    // Save to backend — prompt for project name
+    const projectName = prompt('Enter project name:', file.name.replace(/\.zip$/i, ''));
+    if (projectName && projectName.trim()) {
+      const payload = {
+        name: projectName.trim(),
+        files: {},
+        main_file: mainTexFile,
+      };
+      for (const [path, content] of Object.entries(files)) {
+        if (isBinaryContent(content)) {
+          payload.files[path] = { type: 'binary', content: content.content || content };
+        } else {
+          payload.files[path] = content;
+        }
+      }
+      try {
+        const res = await fetch(`${API_BASE}/projects`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const project = await res.json();
+          state.currentProjectId = project.id;
+          state.currentProjectName = project.name;
+        } else {
+          const err = await res.json();
+          console.warn('Project save to backend failed:', err.error);
+        }
+      } catch (e) {
+        console.warn('Backend save failed:', e);
+      }
+    }
     
     showSuccessToast(`Loaded ${Object.keys(files).length} files`);
     
@@ -1783,6 +2414,10 @@ function resolveIncludes(content, currentPath, visitedFiles = new Set()) {
   }
   
   visitedFiles.add(currentPath);
+
+  // Strip comments before resolving — prevents resolving %\input{...}
+  content = content.replace(/^%.*$/gm, '');
+  content = content.replace(/([^\\])%.*$/gm, '$1');
   
   // Get directory of current file
   const dir = currentPath.split('/').slice(0, -1).join('/');
@@ -1832,8 +2467,10 @@ function resolveIncludes(content, currentPath, visitedFiles = new Set()) {
       const includedContent = resolveIncludes(fileContent, resolvedPath, new Set(visitedFiles));
       replacements.set(fullMatch, includedContent);
     } else {
-      // File not found - leave a comment placeholder
-      console.warn(`Include file not found: ${filename}, tried paths:`, pathsToTry);
+      // File not found - leave a comment placeholder (only warn in project mode)
+      if (state.projectMode) {
+        console.warn(`Include file not found: ${filename}, tried paths:`, pathsToTry);
+      }
       replacements.set(fullMatch, `% [Include not found: ${filename}]`);
     }
   }
@@ -1932,8 +2569,14 @@ function hideContextMenu() {
 function addNewFile(parentPath) {
   const filename = prompt('Enter new file name (e.g., chapter1.tex):');
   if (!filename) return;
+
+  const safeName = sanitizeFilename(filename);
+  if (!safeName) {
+    showErrorToast('Invalid filename. Avoid special characters, ".." and leading slashes.');
+    return;
+  }
   
-  const newPath = parentPath ? `${parentPath}/${filename}` : filename;
+  const newPath = parentPath ? `${parentPath}/${safeName}` : safeName;
   
   if (state.projectFiles[newPath]) {
     showErrorToast('File already exists');
@@ -1966,9 +2609,14 @@ function addNewFile(parentPath) {
 function addNewFolder(parentPath) {
   const foldername = prompt('Enter new folder name:');
   if (!foldername) return;
+
+  const safeName = sanitizeFilename(foldername);
+  if (!safeName || safeName.includes('/')) {
+    showErrorToast('Invalid folder name. Avoid special characters, ".." and slashes.');
+    return;
+  }
   
-  // Add a placeholder .gitkeep file to create the folder structure
-  const placeholderPath = parentPath ? `${parentPath}/${foldername}/.gitkeep` : `${foldername}/.gitkeep`;
+  const placeholderPath = parentPath ? `${parentPath}/${safeName}/.gitkeep` : `${safeName}/.gitkeep`;
   
   if (state.projectFiles[placeholderPath]) {
     showErrorToast('Folder already exists');
@@ -1983,7 +2631,7 @@ function addNewFolder(parentPath) {
   // Auto-save project
   saveProjectToLocalStorage();
   
-  showSuccessToast(`Created folder ${foldername}`);
+  showSuccessToast(`Created folder ${safeName}`);
 }
 
 /**
@@ -1993,9 +2641,15 @@ function renameFile(oldPath) {
   const oldName = oldPath.split('/').pop();
   const newName = prompt('Enter new file name:', oldName);
   if (!newName || newName === oldName) return;
+
+  const safeName = sanitizeFilename(newName);
+  if (!safeName || safeName.includes('/')) {
+    showErrorToast('Invalid filename. Avoid special characters, ".." and slashes.');
+    return;
+  }
   
   const pathParts = oldPath.split('/');
-  pathParts[pathParts.length - 1] = newName;
+  pathParts[pathParts.length - 1] = safeName;
   const newPath = pathParts.join('/');
   
   if (state.projectFiles[newPath]) {
@@ -2010,7 +2664,7 @@ function renameFile(oldPath) {
   // Update current file reference if needed
   if (state.currentFile === oldPath) {
     state.currentFile = newPath;
-    elements.currentFileName.textContent = newName;
+    elements.currentFileName.textContent = safeName;
   }
   
   // Update main file reference if needed
@@ -2024,7 +2678,7 @@ function renameFile(oldPath) {
   // Auto-save project
   saveProjectToLocalStorage();
   
-  showSuccessToast(`Renamed to ${newName}`);
+  showSuccessToast(`Renamed to ${safeName}`);
 }
 
 /**
@@ -2034,9 +2688,15 @@ function renameFolder(oldPath) {
   const oldName = oldPath.split('/').pop();
   const newName = prompt('Enter new folder name:', oldName);
   if (!newName || newName === oldName) return;
+
+  const safeName = sanitizeFilename(newName);
+  if (!safeName || safeName.includes('/')) {
+    showErrorToast('Invalid folder name. Avoid special characters, ".." and slashes.');
+    return;
+  }
   
   const pathParts = oldPath.split('/');
-  pathParts[pathParts.length - 1] = newName;
+  pathParts[pathParts.length - 1] = safeName;
   const newPath = pathParts.join('/');
   
   // Move all files in the folder
@@ -2064,7 +2724,7 @@ function renameFolder(oldPath) {
   // Auto-save project
   saveProjectToLocalStorage();
   
-  showSuccessToast(`Renamed folder to ${newName}`);
+  showSuccessToast(`Renamed folder to ${safeName}`);
 }
 
 /**
@@ -2155,6 +2815,573 @@ function hideToast(type) {
     elements.errorToast.classList.remove('active');
   } else {
     elements.successToast.classList.remove('active');
+  }
+}
+
+// ============================================
+// PROJECTS DRAWER (SQLite backend)
+// ============================================
+
+const API_BASE = '/api/v1';
+
+function openProjectsDrawer() {
+  elements.projectsDrawer.classList.add('open');
+  elements.drawerOverlay.classList.add('open');
+  loadProjectsList();
+}
+
+function closeProjectsDrawer() {
+  elements.projectsDrawer.classList.remove('open');
+  elements.drawerOverlay.classList.remove('open');
+}
+
+async function loadProjectsList() {
+  try {
+    const res = await fetch(`${API_BASE}/projects`);
+    if (!res.ok) {
+      if (res.status === 431) {
+        // Browser sending too-large headers — likely stale cookies
+        elements.projectsList.innerHTML = `
+          <div class="drawer-empty">
+            <p><strong>Browser headers too large</strong></p>
+            <p class="drawer-empty-hint">Clear cookies for localhost in your browser settings, then reload the page.</p>
+          </div>`;
+        return;
+      }
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    renderProjectsList(data.projects || []);
+  } catch (err) {
+    console.error('Failed to load projects:', err);
+    elements.projectsList.innerHTML = '<div class="drawer-empty"><p>Failed to load projects</p><p class="drawer-empty-hint">' + escapeHtml(err.message) + '</p></div>';
+  }
+}
+
+function renderProjectsList(projects) {
+  if (!projects.length) {
+    elements.projectsList.innerHTML = `
+      <div class="drawer-empty">
+        <svg class="drawer-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+        </svg>
+        <p>No projects yet</p>
+        <p class="drawer-empty-hint">Import a ZIP or create a new project to get started.</p>
+      </div>`;
+    return;
+  }
+
+  elements.projectsList.innerHTML = projects.map(p => {
+    const updated = new Date(p.updated_at).toLocaleDateString();
+    const isActive = state.currentProjectId === p.id;
+    return `<div class="project-card${isActive ? ' active' : ''}" data-id="${escapeHtml(p.id)}">
+      <div class="project-card-header">
+        <span class="project-card-name">${escapeHtml(p.name)}</span>
+        <div class="project-card-actions">
+          <button class="icon-btn" title="Rename" data-action="rename" data-id="${escapeHtml(p.id)}">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          </button>
+          <button class="icon-btn" title="Delete" data-action="delete" data-id="${escapeHtml(p.id)}" data-name="${escapeHtml(p.name)}">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="project-card-meta">${p.file_count || 0} files · Updated ${updated}</div>
+    </div>`;
+  }).join('');
+
+  // Attach event listeners
+  elements.projectsList.querySelectorAll('.project-card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('[data-action]')) return;
+      openProject(card.dataset.id);
+    });
+  });
+  elements.projectsList.querySelectorAll('[data-action="rename"]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      renameProjectPrompt(btn.dataset.id);
+    });
+  });
+  elements.projectsList.querySelectorAll('[data-action="delete"]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteProjectFromBackend(btn.dataset.id, btn.dataset.name);
+    });
+  });
+}
+
+async function openProject(projectId) {
+  try {
+    const res = await fetch(`${API_BASE}/projects/${projectId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const project = await res.json();
+
+    state.projectFiles = project.files || {};
+    state.mainFile = project.main_file;
+    state.currentFile = project.main_file;
+    state.projectMode = true;
+    state.currentProjectId = project.id;
+    state.currentProjectName = project.name;
+
+    // Load main file into editor
+    state.currentLatex = state.projectFiles[state.mainFile] || '';
+    elements.editor.value = state.currentLatex;
+    elements.currentFileName.textContent = state.mainFile ? state.mainFile.split('/').pop() : 'LaTeX Source';
+
+    // Show file tree and download zip button
+    elements.fileTree.classList.add('visible');
+    elements.downloadZipBtn.style.display = '';
+    buildFileTree(state.projectFiles);
+
+    closeProjectsDrawer();
+    compile();
+    showSuccessToast(`Opened project: ${project.name}`);
+  } catch (err) {
+    console.error('Failed to open project:', err);
+    showErrorToast('Failed to open project');
+  }
+}
+
+async function saveProjectToBackend() {
+  if (!state.projectMode) return;
+
+  // Sync current editor content
+  if (state.currentFile && state.projectFiles[state.currentFile] !== undefined) {
+    if (!isBinaryContent(state.projectFiles[state.currentFile])) {
+      state.projectFiles[state.currentFile] = state.currentLatex;
+    }
+  }
+
+  const files = {};
+  for (const [path, content] of Object.entries(state.projectFiles)) {
+    if (isBinaryContent(content)) {
+      files[path] = { type: 'binary', content: content.content || content };
+    } else {
+      files[path] = content;
+    }
+  }
+
+  const payload = {
+    files,
+    main_file: state.mainFile,
+  };
+
+  try {
+    if (state.currentProjectId) {
+      // Update existing
+      const res = await fetch(`${API_BASE}/projects/${state.currentProjectId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } else {
+      // Create new — prompt for name
+      const name = state.currentProjectName || prompt('Enter project name:', 'my-project');
+      if (!name) return;
+      payload.name = name;
+      const res = await fetch(`${API_BASE}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const project = await res.json();
+      state.currentProjectId = project.id;
+      state.currentProjectName = project.name;
+    }
+  } catch (err) {
+    console.error('Failed to save project to backend:', err);
+    showErrorToast(`Save failed: ${err.message}`);
+  }
+}
+
+async function renameProjectPrompt(projectId) {
+  const newName = prompt('Enter new project name:');
+  if (!newName || !newName.trim()) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/name`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName.trim() }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    if (state.currentProjectId === projectId) {
+      state.currentProjectName = newName.trim();
+    }
+    loadProjectsList();
+    showSuccessToast(`Renamed to: ${newName.trim()}`);
+  } catch (err) {
+    showErrorToast(err.message);
+  }
+}
+
+async function deleteProjectFromBackend(projectId, projectName) {
+  if (!confirm(`Delete project "${projectName}"? This cannot be undone.`)) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/projects/${projectId}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+    if (state.currentProjectId === projectId) {
+      state.currentProjectId = null;
+      state.currentProjectName = null;
+      newDocument();
+    }
+    loadProjectsList();
+    showSuccessToast(`Deleted project: ${projectName}`);
+  } catch (err) {
+    showErrorToast('Failed to delete project');
+  }
+}
+
+// Auto-save project to backend periodically (debounced)
+let _backendSaveTimer = null;
+function scheduleBackendSave() {
+  if (!state.projectMode) return;
+  clearTimeout(_backendSaveTimer);
+  _backendSaveTimer = setTimeout(() => saveProjectToBackend(), 5000);
+}
+
+// ============================================
+// GITHUB INTEGRATION
+// ============================================
+
+function openGithubModal() {
+  elements.githubModalOverlay.classList.add('open');
+  // Load saved token
+  const savedToken = localStorage.getItem('latexEditor_githubToken');
+  const savedRepo = localStorage.getItem('latexEditor_githubRepo');
+  if (savedToken) {
+    elements.githubToken.value = savedToken;
+    state.githubToken = savedToken;
+    state.githubRepo = savedRepo;
+    showGithubConnected(savedRepo);
+  }
+}
+
+function closeGithubModal() {
+  elements.githubModalOverlay.classList.remove('open');
+}
+
+function showGithubConnected(repo) {
+  elements.githubStatus.className = 'github-status connected';
+  elements.githubStatus.textContent = repo ? `Connected to ${repo}` : 'Token configured';
+  elements.githubStatus.style.display = 'block';
+  elements.githubSave.style.display = 'none';
+  elements.githubDisconnect.style.display = '';
+  elements.githubRepoGroup.style.display = '';
+  if (repo) {
+    elements.githubRepo.value = repo;
+    elements.githubPush.style.display = '';
+    elements.githubPull.style.display = '';
+  }
+}
+
+function showGithubDisconnected() {
+  elements.githubStatus.className = 'github-status';
+  elements.githubStatus.style.display = 'none';
+  elements.githubSave.style.display = '';
+  elements.githubDisconnect.style.display = 'none';
+  elements.githubPush.style.display = 'none';
+  elements.githubPull.style.display = 'none';
+  elements.githubRepoGroup.style.display = 'none';
+  elements.githubToken.value = '';
+  elements.githubRepo.value = '';
+}
+
+async function connectGithub() {
+  const token = elements.githubToken.value.trim();
+  if (!token) {
+    elements.githubStatus.className = 'github-status error';
+    elements.githubStatus.textContent = 'Please enter a Personal Access Token';
+    elements.githubStatus.style.display = 'block';
+    return;
+  }
+
+  try {
+    const res = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `token ${token}` },
+    });
+    if (!res.ok) throw new Error('Invalid token');
+    const user = await res.json();
+
+    state.githubToken = token;
+    localStorage.setItem('latexEditor_githubToken', token);
+    showGithubConnected(null);
+    elements.githubStatus.textContent = `Authenticated as ${user.login}`;
+    showSuccessToast(`Connected to GitHub as ${user.login}`);
+  } catch (err) {
+    elements.githubStatus.className = 'github-status error';
+    elements.githubStatus.textContent = `Authentication failed: ${err.message}`;
+    elements.githubStatus.style.display = 'block';
+  }
+}
+
+function disconnectGithub() {
+  state.githubToken = null;
+  state.githubRepo = null;
+  localStorage.removeItem('latexEditor_githubToken');
+  localStorage.removeItem('latexEditor_githubRepo');
+  showGithubDisconnected();
+  showSuccessToast('Disconnected from GitHub');
+}
+
+async function pushToGithub() {
+  const repo = elements.githubRepo.value.trim();
+  if (!repo || !repo.includes('/')) {
+    showErrorToast('Enter a valid repository (owner/repo)');
+    return;
+  }
+  if (!state.githubToken) {
+    showErrorToast('Connect to GitHub first');
+    return;
+  }
+  if (!state.projectMode || Object.keys(state.projectFiles).length === 0) {
+    showErrorToast('No project to push');
+    return;
+  }
+
+  // Save repo for future use
+  state.githubRepo = repo;
+  localStorage.setItem('latexEditor_githubRepo', repo);
+
+  // Sync current editor content
+  if (state.currentFile && !isBinaryContent(state.projectFiles[state.currentFile])) {
+    state.projectFiles[state.currentFile] = state.currentLatex;
+  }
+
+  const headers = {
+    Authorization: `token ${state.githubToken}`,
+    'Content-Type': 'application/json',
+  };
+
+  try {
+    showStatus('Pushing to GitHub...', 'info');
+
+    // Check if repo exists, if not create it
+    let repoRes = await fetch(`https://api.github.com/repos/${repo}`, { headers });
+    if (repoRes.status === 404) {
+      const [owner, repoName] = repo.split('/');
+      const userRes = await fetch('https://api.github.com/user', { headers });
+      const user = await userRes.json();
+
+      const createEndpoint = owner === user.login
+        ? 'https://api.github.com/user/repos'
+        : `https://api.github.com/orgs/${owner}/repos`;
+
+      repoRes = await fetch(createEndpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ name: repoName, private: true, auto_init: true }),
+      });
+      if (!repoRes.ok) throw new Error('Failed to create repository');
+      // Wait for repo to be ready
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // Get default branch ref
+    const refRes = await fetch(`https://api.github.com/repos/${repo}/git/ref/heads/main`, { headers });
+    let baseSha = null;
+    let baseTreeSha = null;
+
+    if (refRes.ok) {
+      const refData = await refRes.json();
+      baseSha = refData.object.sha;
+      const commitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits/${baseSha}`, { headers });
+      const commitData = await commitRes.json();
+      baseTreeSha = commitData.tree.sha;
+    }
+
+    // Create blobs for each file
+    const tree = [];
+    for (const [path, content] of Object.entries(state.projectFiles)) {
+      let blobContent, encoding;
+      if (isBinaryContent(content)) {
+        blobContent = content.content || content;
+        encoding = 'base64';
+      } else {
+        blobContent = content;
+        encoding = 'utf-8';
+      }
+
+      const blobRes = await fetch(`https://api.github.com/repos/${repo}/git/blobs`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ content: blobContent, encoding }),
+      });
+      if (!blobRes.ok) throw new Error(`Failed to create blob for ${path}`);
+      const blob = await blobRes.json();
+
+      tree.push({
+        path,
+        mode: '100644',
+        type: 'blob',
+        sha: blob.sha,
+      });
+    }
+
+    // Create tree
+    const treePayload = { tree };
+    if (baseTreeSha) treePayload.base_tree = baseTreeSha;
+
+    const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(treePayload),
+    });
+    if (!treeRes.ok) throw new Error('Failed to create tree');
+    const treeData = await treeRes.json();
+
+    // Create commit
+    const commitPayload = {
+      message: `Update from LaTeX Editor (${new Date().toISOString()})`,
+      tree: treeData.sha,
+    };
+    if (baseSha) commitPayload.parents = [baseSha];
+
+    const commitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(commitPayload),
+    });
+    if (!commitRes.ok) throw new Error('Failed to create commit');
+    const newCommit = await commitRes.json();
+
+    // Update ref
+    const updateRef = baseSha
+      ? fetch(`https://api.github.com/repos/${repo}/git/refs/heads/main`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ sha: newCommit.sha }),
+        })
+      : fetch(`https://api.github.com/repos/${repo}/git/refs`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ ref: 'refs/heads/main', sha: newCommit.sha }),
+        });
+
+    const updateRes = await updateRef;
+    if (!updateRes.ok) throw new Error('Failed to update branch ref');
+
+    showGithubConnected(repo);
+    showSuccessToast(`Pushed to github.com/${repo}`);
+    showStatus('Push complete', 'success');
+  } catch (err) {
+    console.error('GitHub push failed:', err);
+    showErrorToast(`Push failed: ${err.message}`);
+    showStatus('Push failed', 'error');
+  }
+}
+
+async function pullFromGithub() {
+  const repo = elements.githubRepo.value.trim();
+  if (!repo || !repo.includes('/')) {
+    showErrorToast('Enter a valid repository (owner/repo)');
+    return;
+  }
+  if (!state.githubToken) {
+    showErrorToast('Connect to GitHub first');
+    return;
+  }
+
+  state.githubRepo = repo;
+  localStorage.setItem('latexEditor_githubRepo', repo);
+
+  const headers = { Authorization: `token ${state.githubToken}` };
+
+  try {
+    showStatus('Pulling from GitHub...', 'info');
+
+    // Get the tree recursively
+    const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees/main?recursive=1`, { headers });
+    if (!treeRes.ok) throw new Error(`Failed to fetch tree: HTTP ${treeRes.status}`);
+    const treeData = await treeRes.json();
+
+    const files = {};
+    let mainFile = null;
+    const textExtensions = ['.tex', '.cls', '.sty', '.bib', '.bst', '.txt', '.md', '.cfg', '.def', '.dtx', '.ins', '.log'];
+
+    for (const item of treeData.tree) {
+      if (item.type !== 'blob') continue;
+      if (item.path.startsWith('.') || item.path.includes('/.')) continue;
+
+      const blobRes = await fetch(`https://api.github.com/repos/${repo}/git/blobs/${item.sha}`, { headers });
+      if (!blobRes.ok) continue;
+      const blob = await blobRes.json();
+
+      const ext = '.' + item.path.split('.').pop().toLowerCase();
+      if (textExtensions.includes(ext)) {
+        files[item.path] = atob(blob.content);
+      } else {
+        files[item.path] = { type: 'binary', content: blob.content };
+      }
+
+      // Detect main file
+      if (!mainFile && (item.path === 'main.tex' || item.path === 'resume.tex' || item.path.endsWith('.tex'))) {
+        mainFile = item.path;
+      }
+    }
+
+    if (Object.keys(files).length === 0) {
+      showErrorToast('No files found in repository');
+      return;
+    }
+
+    if (!mainFile) mainFile = Object.keys(files).find(f => f.endsWith('.tex')) || Object.keys(files)[0];
+
+    // Prompt for project name
+    const projectName = prompt('Project name:', repo.split('/').pop());
+    if (!projectName) return;
+
+    // Save to backend
+    const saveRes = await fetch(`${API_BASE}/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: projectName, files, main_file: mainFile }),
+    });
+
+    if (!saveRes.ok) {
+      const err = await saveRes.json();
+      throw new Error(err.error || `HTTP ${saveRes.status}`);
+    }
+
+    const project = await saveRes.json();
+    state.projectFiles = files;
+    state.mainFile = mainFile;
+    state.currentFile = mainFile;
+    state.projectMode = true;
+    state.currentProjectId = project.id;
+    state.currentProjectName = project.name;
+
+    state.currentLatex = files[mainFile] || '';
+    elements.editor.value = state.currentLatex;
+    elements.currentFileName.textContent = mainFile.split('/').pop();
+    elements.fileTree.classList.add('visible');
+    elements.downloadZipBtn.style.display = '';
+    buildFileTree(files);
+
+    closeGithubModal();
+    closeProjectsDrawer();
+    compile();
+    showSuccessToast(`Pulled project from ${repo}`);
+    showStatus('Pull complete', 'success');
+  } catch (err) {
+    console.error('GitHub pull failed:', err);
+    showErrorToast(`Pull failed: ${err.message}`);
+    showStatus('Pull failed', 'error');
   }
 }
 
