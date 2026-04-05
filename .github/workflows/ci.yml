@@ -111,8 +111,8 @@ jobs:
       - name: Test backend health
         run: |
           for i in 1 2 3 4 5; do
-            if curl -f http://localhost:5000/health; then
-              echo "Backend is healthy"
+            if curl -f http://localhost:80/health; then
+              echo "Backend is healthy (via nginx proxy)"
               exit 0
             fi
             echo "Attempt $i failed, retrying..."
