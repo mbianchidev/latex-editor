@@ -125,10 +125,16 @@ const state = {
   engine: null,
   lastCompileTime: 0,
   // Multi-file project support
-  projectFiles: {},  // { 'path/to/file.tex': 'content' }
-  currentFile: null, // Currently open file path
-  mainFile: null,    // Main .tex file for compilation
-  projectMode: false // Whether we're in multi-file project mode
+  projectFiles: {},
+  currentFile: null,
+  mainFile: null,
+  projectMode: false,
+  // Backend project tracking
+  currentProjectId: null,
+  currentProjectName: null,
+  // GitHub
+  githubToken: null,
+  githubRepo: null,
 };
 
 // ============================================
@@ -172,7 +178,25 @@ const elements = {
   cleanProjectBtn: document.getElementById('cleanProjectBtn'),
   currentFileName: document.getElementById('currentFileName'),
   newFileBtn: document.getElementById('newFileBtn'),
-  newFolderBtn: document.getElementById('newFolderBtn')
+  newFolderBtn: document.getElementById('newFolderBtn'),
+  // Projects drawer
+  projectsBtn: document.getElementById('projectsBtn'),
+  projectsDrawer: document.getElementById('projectsDrawer'),
+  drawerOverlay: document.getElementById('drawerOverlay'),
+  closeDrawer: document.getElementById('closeDrawer'),
+  projectsList: document.getElementById('projectsList'),
+  drawerGithubBtn: document.getElementById('drawerGithubBtn'),
+  // GitHub modal
+  githubModalOverlay: document.getElementById('githubModalOverlay'),
+  closeGithubModal: document.getElementById('closeGithubModal'),
+  githubToken: document.getElementById('githubToken'),
+  githubRepo: document.getElementById('githubRepo'),
+  githubRepoGroup: document.getElementById('githubRepoGroup'),
+  githubStatus: document.getElementById('githubStatus'),
+  githubSave: document.getElementById('githubSave'),
+  githubDisconnect: document.getElementById('githubDisconnect'),
+  githubPush: document.getElementById('githubPush'),
+  githubPull: document.getElementById('githubPull'),
 };
 
 // ============================================
@@ -324,6 +348,42 @@ function initializeEventListeners() {
   elements.closeError.addEventListener('click', () => hideToast('error'));
   elements.closeSuccess.addEventListener('click', () => hideToast('success'));
   
+  // Projects drawer
+  if (elements.projectsBtn) {
+    elements.projectsBtn.addEventListener('click', openProjectsDrawer);
+  }
+  if (elements.closeDrawer) {
+    elements.closeDrawer.addEventListener('click', closeProjectsDrawer);
+  }
+  if (elements.drawerOverlay) {
+    elements.drawerOverlay.addEventListener('click', closeProjectsDrawer);
+  }
+
+  // GitHub modal
+  if (elements.drawerGithubBtn) {
+    elements.drawerGithubBtn.addEventListener('click', openGithubModal);
+  }
+  if (elements.closeGithubModal) {
+    elements.closeGithubModal.addEventListener('click', closeGithubModal);
+  }
+  if (elements.githubModalOverlay) {
+    elements.githubModalOverlay.addEventListener('click', (e) => {
+      if (e.target === elements.githubModalOverlay) closeGithubModal();
+    });
+  }
+  if (elements.githubSave) {
+    elements.githubSave.addEventListener('click', connectGithub);
+  }
+  if (elements.githubDisconnect) {
+    elements.githubDisconnect.addEventListener('click', disconnectGithub);
+  }
+  if (elements.githubPush) {
+    elements.githubPush.addEventListener('click', pushToGithub);
+  }
+  if (elements.githubPull) {
+    elements.githubPull.addEventListener('click', pullFromGithub);
+  }
+
   // Save to localStorage on unload
   window.addEventListener('beforeunload', saveToLocalStorage);
 }
@@ -341,6 +401,7 @@ function handleEditorChange(e) {
   }
   
   saveToLocalStorage();
+  scheduleBackendSave();
 }
 
 function updateCursorPosition() {
@@ -1883,6 +1944,40 @@ async function handleZipUpload(event) {
     // Auto-save project to localStorage after loading
     saveProjectToLocalStorage();
     
+    // Save to backend — prompt for project name
+    const projectName = prompt('Enter project name:', file.name.replace(/\.zip$/i, ''));
+    if (projectName && projectName.trim()) {
+      const payload = {
+        name: projectName.trim(),
+        files: {},
+        main_file: mainTexFile,
+      };
+      for (const [path, content] of Object.entries(files)) {
+        if (isBinaryContent(content)) {
+          payload.files[path] = { type: 'binary', content: content.content || content };
+        } else {
+          payload.files[path] = content;
+        }
+      }
+      try {
+        const res = await fetch(`${API_BASE}/projects`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const project = await res.json();
+          state.currentProjectId = project.id;
+          state.currentProjectName = project.name;
+        } else {
+          const err = await res.json();
+          console.warn('Project save to backend failed:', err.error);
+        }
+      } catch (e) {
+        console.warn('Backend save failed:', e);
+      }
+    }
+    
     showSuccessToast(`Loaded ${Object.keys(files).length} files`);
     
     // Compile the loaded project
@@ -2584,6 +2679,562 @@ function hideToast(type) {
     elements.errorToast.classList.remove('active');
   } else {
     elements.successToast.classList.remove('active');
+  }
+}
+
+// ============================================
+// PROJECTS DRAWER (SQLite backend)
+// ============================================
+
+const API_BASE = '/api/v1';
+
+function openProjectsDrawer() {
+  elements.projectsDrawer.classList.add('open');
+  elements.drawerOverlay.classList.add('open');
+  loadProjectsList();
+}
+
+function closeProjectsDrawer() {
+  elements.projectsDrawer.classList.remove('open');
+  elements.drawerOverlay.classList.remove('open');
+}
+
+async function loadProjectsList() {
+  try {
+    const res = await fetch(`${API_BASE}/projects`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderProjectsList(data.projects || []);
+  } catch (err) {
+    console.error('Failed to load projects:', err);
+    elements.projectsList.innerHTML = '<div class="drawer-empty"><p>Failed to load projects</p></div>';
+  }
+}
+
+function renderProjectsList(projects) {
+  if (!projects.length) {
+    elements.projectsList.innerHTML = `
+      <div class="drawer-empty">
+        <svg class="drawer-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+        </svg>
+        <p>No projects yet</p>
+        <p class="drawer-empty-hint">Import a ZIP or create a new project to get started.</p>
+      </div>`;
+    return;
+  }
+
+  elements.projectsList.innerHTML = projects.map(p => {
+    const updated = new Date(p.updated_at).toLocaleDateString();
+    const isActive = state.currentProjectId === p.id;
+    return `<div class="project-card${isActive ? ' active' : ''}" data-id="${escapeHtml(p.id)}">
+      <div class="project-card-header">
+        <span class="project-card-name">${escapeHtml(p.name)}</span>
+        <div class="project-card-actions">
+          <button class="icon-btn" title="Rename" data-action="rename" data-id="${escapeHtml(p.id)}">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          </button>
+          <button class="icon-btn" title="Delete" data-action="delete" data-id="${escapeHtml(p.id)}" data-name="${escapeHtml(p.name)}">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="project-card-meta">${p.file_count || 0} files · Updated ${updated}</div>
+    </div>`;
+  }).join('');
+
+  // Attach event listeners
+  elements.projectsList.querySelectorAll('.project-card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('[data-action]')) return;
+      openProject(card.dataset.id);
+    });
+  });
+  elements.projectsList.querySelectorAll('[data-action="rename"]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      renameProjectPrompt(btn.dataset.id);
+    });
+  });
+  elements.projectsList.querySelectorAll('[data-action="delete"]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteProjectFromBackend(btn.dataset.id, btn.dataset.name);
+    });
+  });
+}
+
+async function openProject(projectId) {
+  try {
+    const res = await fetch(`${API_BASE}/projects/${projectId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const project = await res.json();
+
+    state.projectFiles = project.files || {};
+    state.mainFile = project.main_file;
+    state.currentFile = project.main_file;
+    state.projectMode = true;
+    state.currentProjectId = project.id;
+    state.currentProjectName = project.name;
+
+    // Load main file into editor
+    state.currentLatex = state.projectFiles[state.mainFile] || '';
+    elements.editor.value = state.currentLatex;
+    elements.currentFileName.textContent = state.mainFile ? state.mainFile.split('/').pop() : 'LaTeX Source';
+
+    // Show file tree and download zip button
+    elements.fileTree.classList.add('visible');
+    elements.downloadZipBtn.style.display = '';
+    buildFileTree(state.projectFiles);
+
+    closeProjectsDrawer();
+    compile();
+    showSuccessToast(`Opened project: ${project.name}`);
+  } catch (err) {
+    console.error('Failed to open project:', err);
+    showErrorToast('Failed to open project');
+  }
+}
+
+async function saveProjectToBackend() {
+  if (!state.projectMode) return;
+
+  // Sync current editor content
+  if (state.currentFile && state.projectFiles[state.currentFile] !== undefined) {
+    if (!isBinaryContent(state.projectFiles[state.currentFile])) {
+      state.projectFiles[state.currentFile] = state.currentLatex;
+    }
+  }
+
+  const files = {};
+  for (const [path, content] of Object.entries(state.projectFiles)) {
+    if (isBinaryContent(content)) {
+      files[path] = { type: 'binary', content: content.content || content };
+    } else {
+      files[path] = content;
+    }
+  }
+
+  const payload = {
+    files,
+    main_file: state.mainFile,
+  };
+
+  try {
+    if (state.currentProjectId) {
+      // Update existing
+      const res = await fetch(`${API_BASE}/projects/${state.currentProjectId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } else {
+      // Create new — prompt for name
+      const name = state.currentProjectName || prompt('Enter project name:', 'my-project');
+      if (!name) return;
+      payload.name = name;
+      const res = await fetch(`${API_BASE}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const project = await res.json();
+      state.currentProjectId = project.id;
+      state.currentProjectName = project.name;
+    }
+  } catch (err) {
+    console.error('Failed to save project to backend:', err);
+    showErrorToast(`Save failed: ${err.message}`);
+  }
+}
+
+async function renameProjectPrompt(projectId) {
+  const newName = prompt('Enter new project name:');
+  if (!newName || !newName.trim()) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/name`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName.trim() }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    if (state.currentProjectId === projectId) {
+      state.currentProjectName = newName.trim();
+    }
+    loadProjectsList();
+    showSuccessToast(`Renamed to: ${newName.trim()}`);
+  } catch (err) {
+    showErrorToast(err.message);
+  }
+}
+
+async function deleteProjectFromBackend(projectId, projectName) {
+  if (!confirm(`Delete project "${projectName}"? This cannot be undone.`)) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/projects/${projectId}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+    if (state.currentProjectId === projectId) {
+      state.currentProjectId = null;
+      state.currentProjectName = null;
+      newDocument();
+    }
+    loadProjectsList();
+    showSuccessToast(`Deleted project: ${projectName}`);
+  } catch (err) {
+    showErrorToast('Failed to delete project');
+  }
+}
+
+// Auto-save project to backend periodically (debounced)
+let _backendSaveTimer = null;
+function scheduleBackendSave() {
+  if (!state.projectMode) return;
+  clearTimeout(_backendSaveTimer);
+  _backendSaveTimer = setTimeout(() => saveProjectToBackend(), 5000);
+}
+
+// ============================================
+// GITHUB INTEGRATION
+// ============================================
+
+function openGithubModal() {
+  elements.githubModalOverlay.classList.add('open');
+  // Load saved token
+  const savedToken = localStorage.getItem('latexEditor_githubToken');
+  const savedRepo = localStorage.getItem('latexEditor_githubRepo');
+  if (savedToken) {
+    elements.githubToken.value = savedToken;
+    state.githubToken = savedToken;
+    state.githubRepo = savedRepo;
+    showGithubConnected(savedRepo);
+  }
+}
+
+function closeGithubModal() {
+  elements.githubModalOverlay.classList.remove('open');
+}
+
+function showGithubConnected(repo) {
+  elements.githubStatus.className = 'github-status connected';
+  elements.githubStatus.textContent = repo ? `Connected to ${repo}` : 'Token configured';
+  elements.githubStatus.style.display = 'block';
+  elements.githubSave.style.display = 'none';
+  elements.githubDisconnect.style.display = '';
+  elements.githubRepoGroup.style.display = '';
+  if (repo) {
+    elements.githubRepo.value = repo;
+    elements.githubPush.style.display = '';
+    elements.githubPull.style.display = '';
+  }
+}
+
+function showGithubDisconnected() {
+  elements.githubStatus.className = 'github-status';
+  elements.githubStatus.style.display = 'none';
+  elements.githubSave.style.display = '';
+  elements.githubDisconnect.style.display = 'none';
+  elements.githubPush.style.display = 'none';
+  elements.githubPull.style.display = 'none';
+  elements.githubRepoGroup.style.display = 'none';
+  elements.githubToken.value = '';
+  elements.githubRepo.value = '';
+}
+
+async function connectGithub() {
+  const token = elements.githubToken.value.trim();
+  if (!token) {
+    elements.githubStatus.className = 'github-status error';
+    elements.githubStatus.textContent = 'Please enter a Personal Access Token';
+    elements.githubStatus.style.display = 'block';
+    return;
+  }
+
+  try {
+    const res = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `token ${token}` },
+    });
+    if (!res.ok) throw new Error('Invalid token');
+    const user = await res.json();
+
+    state.githubToken = token;
+    localStorage.setItem('latexEditor_githubToken', token);
+    showGithubConnected(null);
+    elements.githubStatus.textContent = `Authenticated as ${user.login}`;
+    showSuccessToast(`Connected to GitHub as ${user.login}`);
+  } catch (err) {
+    elements.githubStatus.className = 'github-status error';
+    elements.githubStatus.textContent = `Authentication failed: ${err.message}`;
+    elements.githubStatus.style.display = 'block';
+  }
+}
+
+function disconnectGithub() {
+  state.githubToken = null;
+  state.githubRepo = null;
+  localStorage.removeItem('latexEditor_githubToken');
+  localStorage.removeItem('latexEditor_githubRepo');
+  showGithubDisconnected();
+  showSuccessToast('Disconnected from GitHub');
+}
+
+async function pushToGithub() {
+  const repo = elements.githubRepo.value.trim();
+  if (!repo || !repo.includes('/')) {
+    showErrorToast('Enter a valid repository (owner/repo)');
+    return;
+  }
+  if (!state.githubToken) {
+    showErrorToast('Connect to GitHub first');
+    return;
+  }
+  if (!state.projectMode || Object.keys(state.projectFiles).length === 0) {
+    showErrorToast('No project to push');
+    return;
+  }
+
+  // Save repo for future use
+  state.githubRepo = repo;
+  localStorage.setItem('latexEditor_githubRepo', repo);
+
+  // Sync current editor content
+  if (state.currentFile && !isBinaryContent(state.projectFiles[state.currentFile])) {
+    state.projectFiles[state.currentFile] = state.currentLatex;
+  }
+
+  const headers = {
+    Authorization: `token ${state.githubToken}`,
+    'Content-Type': 'application/json',
+  };
+
+  try {
+    showStatus('Pushing to GitHub...', 'info');
+
+    // Check if repo exists, if not create it
+    let repoRes = await fetch(`https://api.github.com/repos/${repo}`, { headers });
+    if (repoRes.status === 404) {
+      const [owner, repoName] = repo.split('/');
+      const userRes = await fetch('https://api.github.com/user', { headers });
+      const user = await userRes.json();
+
+      const createEndpoint = owner === user.login
+        ? 'https://api.github.com/user/repos'
+        : `https://api.github.com/orgs/${owner}/repos`;
+
+      repoRes = await fetch(createEndpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ name: repoName, private: true, auto_init: true }),
+      });
+      if (!repoRes.ok) throw new Error('Failed to create repository');
+      // Wait for repo to be ready
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // Get default branch ref
+    const refRes = await fetch(`https://api.github.com/repos/${repo}/git/ref/heads/main`, { headers });
+    let baseSha = null;
+    let baseTreeSha = null;
+
+    if (refRes.ok) {
+      const refData = await refRes.json();
+      baseSha = refData.object.sha;
+      const commitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits/${baseSha}`, { headers });
+      const commitData = await commitRes.json();
+      baseTreeSha = commitData.tree.sha;
+    }
+
+    // Create blobs for each file
+    const tree = [];
+    for (const [path, content] of Object.entries(state.projectFiles)) {
+      let blobContent, encoding;
+      if (isBinaryContent(content)) {
+        blobContent = content.content || content;
+        encoding = 'base64';
+      } else {
+        blobContent = content;
+        encoding = 'utf-8';
+      }
+
+      const blobRes = await fetch(`https://api.github.com/repos/${repo}/git/blobs`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ content: blobContent, encoding }),
+      });
+      if (!blobRes.ok) throw new Error(`Failed to create blob for ${path}`);
+      const blob = await blobRes.json();
+
+      tree.push({
+        path,
+        mode: '100644',
+        type: 'blob',
+        sha: blob.sha,
+      });
+    }
+
+    // Create tree
+    const treePayload = { tree };
+    if (baseTreeSha) treePayload.base_tree = baseTreeSha;
+
+    const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(treePayload),
+    });
+    if (!treeRes.ok) throw new Error('Failed to create tree');
+    const treeData = await treeRes.json();
+
+    // Create commit
+    const commitPayload = {
+      message: `Update from LaTeX Editor (${new Date().toISOString()})`,
+      tree: treeData.sha,
+    };
+    if (baseSha) commitPayload.parents = [baseSha];
+
+    const commitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(commitPayload),
+    });
+    if (!commitRes.ok) throw new Error('Failed to create commit');
+    const newCommit = await commitRes.json();
+
+    // Update ref
+    const updateRef = baseSha
+      ? fetch(`https://api.github.com/repos/${repo}/git/refs/heads/main`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ sha: newCommit.sha }),
+        })
+      : fetch(`https://api.github.com/repos/${repo}/git/refs`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ ref: 'refs/heads/main', sha: newCommit.sha }),
+        });
+
+    const updateRes = await updateRef;
+    if (!updateRes.ok) throw new Error('Failed to update branch ref');
+
+    showGithubConnected(repo);
+    showSuccessToast(`Pushed to github.com/${repo}`);
+    showStatus('Push complete', 'success');
+  } catch (err) {
+    console.error('GitHub push failed:', err);
+    showErrorToast(`Push failed: ${err.message}`);
+    showStatus('Push failed', 'error');
+  }
+}
+
+async function pullFromGithub() {
+  const repo = elements.githubRepo.value.trim();
+  if (!repo || !repo.includes('/')) {
+    showErrorToast('Enter a valid repository (owner/repo)');
+    return;
+  }
+  if (!state.githubToken) {
+    showErrorToast('Connect to GitHub first');
+    return;
+  }
+
+  state.githubRepo = repo;
+  localStorage.setItem('latexEditor_githubRepo', repo);
+
+  const headers = { Authorization: `token ${state.githubToken}` };
+
+  try {
+    showStatus('Pulling from GitHub...', 'info');
+
+    // Get the tree recursively
+    const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees/main?recursive=1`, { headers });
+    if (!treeRes.ok) throw new Error(`Failed to fetch tree: HTTP ${treeRes.status}`);
+    const treeData = await treeRes.json();
+
+    const files = {};
+    let mainFile = null;
+    const textExtensions = ['.tex', '.cls', '.sty', '.bib', '.bst', '.txt', '.md', '.cfg', '.def', '.dtx', '.ins', '.log'];
+
+    for (const item of treeData.tree) {
+      if (item.type !== 'blob') continue;
+      if (item.path.startsWith('.') || item.path.includes('/.')) continue;
+
+      const blobRes = await fetch(`https://api.github.com/repos/${repo}/git/blobs/${item.sha}`, { headers });
+      if (!blobRes.ok) continue;
+      const blob = await blobRes.json();
+
+      const ext = '.' + item.path.split('.').pop().toLowerCase();
+      if (textExtensions.includes(ext)) {
+        files[item.path] = atob(blob.content);
+      } else {
+        files[item.path] = { type: 'binary', content: blob.content };
+      }
+
+      // Detect main file
+      if (!mainFile && (item.path === 'main.tex' || item.path === 'resume.tex' || item.path.endsWith('.tex'))) {
+        mainFile = item.path;
+      }
+    }
+
+    if (Object.keys(files).length === 0) {
+      showErrorToast('No files found in repository');
+      return;
+    }
+
+    if (!mainFile) mainFile = Object.keys(files).find(f => f.endsWith('.tex')) || Object.keys(files)[0];
+
+    // Prompt for project name
+    const projectName = prompt('Project name:', repo.split('/').pop());
+    if (!projectName) return;
+
+    // Save to backend
+    const saveRes = await fetch(`${API_BASE}/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: projectName, files, main_file: mainFile }),
+    });
+
+    if (!saveRes.ok) {
+      const err = await saveRes.json();
+      throw new Error(err.error || `HTTP ${saveRes.status}`);
+    }
+
+    const project = await saveRes.json();
+    state.projectFiles = files;
+    state.mainFile = mainFile;
+    state.currentFile = mainFile;
+    state.projectMode = true;
+    state.currentProjectId = project.id;
+    state.currentProjectName = project.name;
+
+    state.currentLatex = files[mainFile] || '';
+    elements.editor.value = state.currentLatex;
+    elements.currentFileName.textContent = mainFile.split('/').pop();
+    elements.fileTree.classList.add('visible');
+    elements.downloadZipBtn.style.display = '';
+    buildFileTree(files);
+
+    closeGithubModal();
+    closeProjectsDrawer();
+    compile();
+    showSuccessToast(`Pulled project from ${repo}`);
+    showStatus('Pull complete', 'success');
+  } catch (err) {
+    console.error('GitHub pull failed:', err);
+    showErrorToast(`Pull failed: ${err.message}`);
+    showStatus('Pull failed', 'error');
   }
 }
 

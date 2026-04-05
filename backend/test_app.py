@@ -1,19 +1,32 @@
 """
 Backend API Tests
 """
+import os
+import tempfile
 import pytest
-from app import app, documents, documents_lock, MAX_DOCUMENTS
+from app import app, documents, documents_lock, MAX_DOCUMENTS, DB_PATH
 
 
 @pytest.fixture
 def client():
-    """Create test client"""
+    """Create test client with temp database"""
     app.config["TESTING"] = True
+    # Use a temp DB for tests
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+        test_db = f.name
+    
+    import app as app_module
+    original_db = app_module.DB_PATH
+    app_module.DB_PATH = test_db
+    app_module.init_db()
+    
     with app.test_client() as client:
-        # Clear documents between tests
         with documents_lock:
             documents.clear()
         yield client
+    
+    app_module.DB_PATH = original_db
+    os.unlink(test_db)
 
 
 class TestHealthEndpoint:
@@ -334,3 +347,139 @@ class TestErrorHandlers:
         assert response.status_code == 404
         data = response.get_json()
         assert "error" in data
+
+
+class TestProjectsCRUD:
+    """Tests for /api/v1/projects CRUD endpoints"""
+
+    def test_list_projects_empty(self, client):
+        """GET /api/v1/projects returns empty list initially"""
+        response = client.get("/api/v1/projects")
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["projects"] == []
+
+    def test_create_project(self, client):
+        """POST /api/v1/projects creates a project with files"""
+        response = client.post("/api/v1/projects", json={
+            "name": "My Resume",
+            "main_file": "main.tex",
+            "files": {
+                "main.tex": "\\documentclass{article}\\begin{document}Hello\\end{document}",
+                "cv/skills.tex": "\\cvskill{Cloud}{AWS}"
+            }
+        })
+        assert response.status_code == 201
+        data = response.get_json()
+        assert data["name"] == "My Resume"
+        assert data["main_file"] == "main.tex"
+        assert data["file_count"] == 2
+        assert "main.tex" in data["files"]
+
+    def test_unique_project_name(self, client):
+        """POST /api/v1/projects rejects duplicate names"""
+        client.post("/api/v1/projects", json={
+            "name": "UniqueTest",
+            "files": {"main.tex": "hello"}
+        })
+        response = client.post("/api/v1/projects", json={
+            "name": "UniqueTest",
+            "files": {"main.tex": "hello"}
+        })
+        assert response.status_code == 409
+        assert "already exists" in response.get_json()["error"]
+
+    def test_get_project(self, client):
+        """GET /api/v1/projects/:id returns project with files"""
+        create = client.post("/api/v1/projects", json={
+            "name": "GetTest",
+            "files": {"main.tex": "content"}
+        })
+        pid = create.get_json()["id"]
+        response = client.get(f"/api/v1/projects/{pid}")
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["name"] == "GetTest"
+        assert "files" in data
+
+    def test_get_project_not_found(self, client):
+        """GET /api/v1/projects/:id returns 404 for missing project"""
+        response = client.get("/api/v1/projects/nonexistent")
+        assert response.status_code == 404
+
+    def test_update_project_files(self, client):
+        """PUT /api/v1/projects/:id updates files"""
+        create = client.post("/api/v1/projects", json={
+            "name": "UpdateTest",
+            "files": {"main.tex": "old content"}
+        })
+        pid = create.get_json()["id"]
+        response = client.put(f"/api/v1/projects/{pid}", json={
+            "files": {"main.tex": "new content", "extra.tex": "extra"}
+        })
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["file_count"] == 2
+        assert data["files"]["main.tex"] == "new content"
+
+    def test_rename_project(self, client):
+        """PUT /api/v1/projects/:id/name renames project"""
+        create = client.post("/api/v1/projects", json={
+            "name": "OldName",
+            "files": {"main.tex": "content"}
+        })
+        pid = create.get_json()["id"]
+        response = client.put(f"/api/v1/projects/{pid}/name", json={
+            "name": "NewName"
+        })
+        assert response.status_code == 200
+        assert response.get_json()["name"] == "NewName"
+
+    def test_rename_project_duplicate(self, client):
+        """PUT /api/v1/projects/:id/name rejects duplicate name"""
+        client.post("/api/v1/projects", json={
+            "name": "ProjectA",
+            "files": {"main.tex": "a"}
+        })
+        create_b = client.post("/api/v1/projects", json={
+            "name": "ProjectB",
+            "files": {"main.tex": "b"}
+        })
+        pid_b = create_b.get_json()["id"]
+        response = client.put(f"/api/v1/projects/{pid_b}/name", json={
+            "name": "ProjectA"
+        })
+        assert response.status_code == 409
+
+    def test_delete_project(self, client):
+        """DELETE /api/v1/projects/:id removes project"""
+        create = client.post("/api/v1/projects", json={
+            "name": "DeleteMe",
+            "files": {"main.tex": "content"}
+        })
+        pid = create.get_json()["id"]
+        response = client.delete(f"/api/v1/projects/{pid}")
+        assert response.status_code == 204
+        # Verify it's gone
+        get_resp = client.get(f"/api/v1/projects/{pid}")
+        assert get_resp.status_code == 404
+
+    def test_create_project_missing_name(self, client):
+        """POST /api/v1/projects rejects missing name"""
+        response = client.post("/api/v1/projects", json={
+            "files": {"main.tex": "content"}
+        })
+        assert response.status_code == 400
+
+    def test_create_project_binary_files(self, client):
+        """POST /api/v1/projects handles binary files"""
+        response = client.post("/api/v1/projects", json={
+            "name": "BinaryTest",
+            "files": {
+                "main.tex": "content",
+                "font.ttf": {"type": "binary", "content": "base64data=="}
+            }
+        })
+        assert response.status_code == 201
+        data = response.get_json()
+        assert data["file_count"] == 2

@@ -48,6 +48,12 @@
                 <span class="tagline">Professional Document Editing</span>
             </div>
             <div class="header-actions">
+                <button class="btn btn-secondary" id="projectsBtn" title="My Projects">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    Projects
+                </button>
                 <div class="dropdown" id="newDropdown">
                     <button class="btn btn-secondary dropdown-toggle" id="newDoc" title="New Document/Project">
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -261,6 +267,70 @@
             <p class="toast-message" id="successMessage"></p>
         </div>
         <button class="toast-close" id="closeSuccess">×</button>
+    </div>
+
+    <!-- Projects Drawer -->
+    <div class="drawer-overlay" id="drawerOverlay"></div>
+    <aside class="projects-drawer" id="projectsDrawer">
+        <div class="drawer-header">
+            <h2 class="drawer-title">My Projects</h2>
+            <button class="icon-btn" id="closeDrawer" title="Close">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        </div>
+        <div class="drawer-body" id="projectsList">
+            <div class="drawer-empty">
+                <svg class="drawer-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+                <p>No projects yet</p>
+                <p class="drawer-empty-hint">Import a ZIP or create a new project to get started.</p>
+            </div>
+        </div>
+        <div class="drawer-footer">
+            <button class="btn btn-secondary btn-full" id="drawerGithubBtn" title="Connect GitHub">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+                </svg>
+                GitHub Settings
+            </button>
+        </div>
+    </aside>
+
+    <!-- GitHub Settings Modal -->
+    <div class="modal-overlay" id="githubModalOverlay">
+        <div class="modal" id="githubModal">
+            <div class="modal-header">
+                <h3>GitHub Connection</h3>
+                <button class="icon-btn" id="closeGithubModal">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="githubToken">Personal Access Token (PAT)</label>
+                    <input type="password" id="githubToken" class="form-input" placeholder="ghp_xxxxxxxxxxxx" autocomplete="off">
+                    <small class="form-hint">Generate at <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a> with <code>repo</code> scope.</small>
+                </div>
+                <div id="githubStatus" class="github-status"></div>
+                <div class="form-group" id="githubRepoGroup" style="display:none;">
+                    <label for="githubRepo">Repository (owner/repo)</label>
+                    <input type="text" id="githubRepo" class="form-input" placeholder="username/my-latex-project">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="githubDisconnect" style="display:none;">Disconnect</button>
+                <button class="btn btn-secondary" id="githubPull" style="display:none;">Pull from Repo</button>
+                <button class="btn btn-primary" id="githubSave">Connect</button>
+                <button class="btn btn-primary" id="githubPush" style="display:none;">Push to Repo</button>
+            </div>
+        </div>
     </div>
 
     <!-- Scripts -->
