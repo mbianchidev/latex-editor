@@ -206,6 +206,21 @@ const elements = {
 async function init() {
   showStatus('Initializing...', 'info');
   
+  // Migrate: clear ALL oversized localStorage data (now using SQLite backend)
+  // This prevents 431 errors caused by browsers sending large cookies
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('latexEditor_')) {
+        const val = localStorage.getItem(key);
+        if (val && val.length > 50000) {
+          localStorage.removeItem(key);
+          console.info(`Cleared oversized localStorage key: ${key} (${val.length} chars)`);
+        }
+      }
+    }
+  } catch (e) { /* ignore */ }
+  
   // Initialize editor
   initializeEditor();
   
@@ -2338,8 +2353,10 @@ function resolveIncludes(content, currentPath, visitedFiles = new Set()) {
       const includedContent = resolveIncludes(fileContent, resolvedPath, new Set(visitedFiles));
       replacements.set(fullMatch, includedContent);
     } else {
-      // File not found - leave a comment placeholder
-      console.warn(`Include file not found: ${filename}, tried paths:`, pathsToTry);
+      // File not found - leave a comment placeholder (only warn in project mode)
+      if (state.projectMode) {
+        console.warn(`Include file not found: ${filename}, tried paths:`, pathsToTry);
+      }
       replacements.set(fullMatch, `% [Include not found: ${filename}]`);
     }
   }
@@ -2707,12 +2724,23 @@ function closeProjectsDrawer() {
 async function loadProjectsList() {
   try {
     const res = await fetch(`${API_BASE}/projects`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      if (res.status === 431) {
+        // Browser sending too-large headers — likely stale cookies
+        elements.projectsList.innerHTML = `
+          <div class="drawer-empty">
+            <p><strong>Browser headers too large</strong></p>
+            <p class="drawer-empty-hint">Clear cookies for localhost in your browser settings, then reload the page.</p>
+          </div>`;
+        return;
+      }
+      throw new Error(`HTTP ${res.status}`);
+    }
     const data = await res.json();
     renderProjectsList(data.projects || []);
   } catch (err) {
     console.error('Failed to load projects:', err);
-    elements.projectsList.innerHTML = '<div class="drawer-empty"><p>Failed to load projects</p></div>';
+    elements.projectsList.innerHTML = '<div class="drawer-empty"><p>Failed to load projects</p><p class="drawer-empty-hint">' + escapeHtml(err.message) + '</p></div>';
   }
 }
 
