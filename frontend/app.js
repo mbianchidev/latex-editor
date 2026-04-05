@@ -211,7 +211,6 @@ async function init() {
   showStatus('Initializing...', 'info');
   
   // Migrate: clear ALL oversized localStorage data (now using SQLite backend)
-  // This prevents 431 errors caused by browsers sending large cookies
   try {
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const key = localStorage.key(i);
@@ -225,25 +224,25 @@ async function init() {
     }
   } catch (e) { /* ignore */ }
   
-  // Initialize editor
   initializeEditor();
   
-  // Set default template
   state.currentLatex = DEFAULT_TEMPLATE;
   elements.editor.value = DEFAULT_TEMPLATE;
   
-  // Initialize event listeners
   initializeEventListeners();
-  
-  // Initialize resizable divider
   initializeResizer();
   
-  // Load from localStorage if available
-  loadFromLocalStorage();
+  // Try to restore last session — localStorage first, then backend
+  let restored = false;
+  try {
+    restored = loadFromLocalStorage();
+  } catch (e) { /* ignore */ }
+
+  if (!restored) {
+    restored = await loadLastProjectFromBackend();
+  }
   
   showStatus('Compiling...', 'info');
-  
-  // Compile on first load
   compile(true);
 }
 
@@ -648,10 +647,16 @@ function validateLatexSyntax(latex) {
     'smallskip', 'medskip', 'bigskip',
     // Boxes
     'mbox', 'makebox', 'fbox', 'framebox', 'parbox', 'minipage', 'raisebox',
+    // Text symbols
+    'textbar', 'textperiodcentered', 'texteuro', 'textendash', 'textemdash',
+    'textasciitilde', 'textbackslash', 'ldots', 'dots',
     // Misc standard
     'LaTeX', 'TeX', 'today', 'thanks', 'rule', 'phantom', 'hphantom', 'vphantom',
     'multicolumn', 'cline', 'hline', 'toprule', 'midrule', 'bottomrule',
-    'usepackage', 'RequirePackage',
+    'hrule', 'providecommand',
+    'usepackage', 'RequirePackage', 'newenvironment',
+    'labelitemi', 'labelitemii', 'labelitemiii', 'parskip',
+    'extracolsep', 'fill', 'linewidth',
     // CV-class
     'name', 'position', 'email', 'github', 'linkedin', 'medium', 'bluesky',
     'cvsection', 'cventry', 'cvskill', 'cvparagraph', 'cvhonor',
@@ -663,13 +668,19 @@ function validateLatexSyntax(latex) {
     'enskip', 'cdotp', 'thepage',
   ]);
 
-  // Parse user-defined commands from the preamble
+  // Parse user-defined commands and environments from the preamble
   const preamble = latex.match(/^([\s\S]*?)\\begin\{document\}/);
   if (preamble) {
     const newcmdPattern = /\\(?:newcommand|renewcommand|providecommand)\s*\{?\\([a-zA-Z]+)\}?/g;
     let ncMatch;
     while ((ncMatch = newcmdPattern.exec(preamble[1])) !== null) {
       allRecognizedCommands.add(ncMatch[1]);
+    }
+    // Also recognize custom environments used via \begin{name}
+    const newenvPattern = /\\newenvironment\{([a-zA-Z]+)\}/g;
+    let neMatch;
+    while ((neMatch = newenvPattern.exec(preamble[1])) !== null) {
+      allRecognizedCommands.add(neMatch[1]);
     }
   }
 
@@ -702,6 +713,64 @@ function validateLatexSyntax(latex) {
   }
 
   return errors;
+}
+
+/**
+ * Parse \newcommand / \newenvironment definitions from the preamble
+ * and expand them in the document body.
+ */
+function expandUserMacros(preamble, body) {
+  // Parse \newcommand{\name}[numArgs]{definition}
+  const macroRegex = /\\(?:newcommand|renewcommand)\s*\{?\\([a-zA-Z]+)\}?\s*(?:\[(\d+)\])?\s*/g;
+  const macros = [];
+  let mMatch;
+
+  while ((mMatch = macroRegex.exec(preamble)) !== null) {
+    const name = mMatch[1];
+    const numArgs = parseInt(mMatch[2] || '0', 10);
+    const defGroup = extractBraceGroup(preamble, mMatch.index + mMatch[0].length);
+    if (!defGroup) continue;
+    macros.push({ name, numArgs, definition: defGroup.value });
+  }
+
+  // Expand macros in the body (up to 3 passes for nested macros)
+  let result = body;
+  for (let pass = 0; pass < 3; pass++) {
+    let changed = false;
+    for (const macro of macros) {
+      const pattern = new RegExp('\\\\' + macro.name + '(?![a-zA-Z])', 'g');
+      let match;
+      while ((match = pattern.exec(result)) !== null) {
+        const start = match.index;
+        let pos = start + match[0].length;
+        // Skip whitespace
+        while (pos < result.length && /\s/.test(result[pos])) pos++;
+
+        // Extract arguments
+        const args = [];
+        for (let i = 0; i < macro.numArgs; i++) {
+          const group = extractBraceGroup(result, pos);
+          if (!group) break;
+          args.push(group.value);
+          pos = group.end;
+          while (pos < result.length && /\s/.test(result[pos])) pos++;
+        }
+
+        // Substitute #1, #2, etc. in the definition
+        let expanded = macro.definition;
+        for (let i = 0; i < args.length; i++) {
+          expanded = expanded.replace(new RegExp('#' + (i + 1), 'g'), args[i]);
+        }
+
+        result = result.substring(0, start) + expanded + result.substring(pos);
+        pattern.lastIndex = start + expanded.length;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  return result;
 }
 
 /**
@@ -780,14 +849,18 @@ function convertLatexToHTML(latex) {
   const docMatch = latex.match(/\\begin\{document\}([\s\S]*?)\\end\{document\}/);
   let content = docMatch ? docMatch[1] : latex;
 
+  // 3.5. Expand user-defined macros from preamble
+  const preamble = latex.match(/^([\s\S]*?)\\begin\{document\}/);
+  if (preamble) {
+    content = expandUserMacros(preamble[1], content);
+  }
+
   // 4. Strip commands that produce no visible output
   content = content
     .replace(/\\makecvheader\b/g, '')
     .replace(/\\makecvfooter[\s\S]*?\{\\thepage\}/g, '')
     .replace(/\\makecvfooter\b/g, '')
     .replace(/\\maketitle/g, '')
-    .replace(/\\vspace\*?\{[^}]*\}/g, '')
-    .replace(/\\hspace\*?\{[^}]*\}/g, '')
     .replace(/\\vfill/g, '')
     .replace(/\\newpage/g, '<div class="page-break-marker"></div>')
     .replace(/\\clearpage/g, '<div class="page-break-marker"></div>')
@@ -797,10 +870,19 @@ function convertLatexToHTML(latex) {
     .replace(/\\fontdir(\[[^\]]*\])?\{[^}]*\}/g, '')
     .replace(/\\colorlet\{[^}]*\}\{[^}]*\}/g, '')
     .replace(/\\setbool\{[^}]*\}\{[^}]*\}/g, '')
-    .replace(/\\renewcommand\{[^}]*\}\{[^}]*\}/g, '')
     .replace(/\\linespread\{[^}]*\}/g, '')
     .replace(/\\geometry\{[^}]*\}/g, '')
-    .replace(/\\thepage/g, '');
+    .replace(/\\thepage/g, '')
+    // Strip \renewcommand / \setlength / \setcounter / \pagestyle / \parskip assignments
+    .replace(/\\renewcommand[^{]*\{[^}]*\}\{[^}]*\}/g, '')
+    .replace(/\\renewcommand\\[a-zA-Z]+\{[^}]*\}/g, '')
+    .replace(/\\setlength\{[^}]*\}\{[^}]*\}/g, '')
+    .replace(/\\setcounter\{[^}]*\}\{[^}]*\}/g, '')
+    .replace(/\\pagestyle\{[^}]*\}/g, '')
+    .replace(/\\setlength\{\\[a-zA-Z]+\}\{[^}]*\}/g, '')
+    .replace(/\\parskip\s*=\s*[^\n]*/g, '')
+    .replace(/\\labelitemi/g, '')
+    .replace(/\\labelitemii/g, '');
 
   // 4.5. Process LaTeX escape sequences EARLY (before escapeHtml in parseCvEntries)
   content = content.replace(/\\&/g, '&');
@@ -809,6 +891,75 @@ function convertLatexToHTML(latex) {
   content = content.replace(/\\\$/g, '$');
   content = content.replace(/\\_/g, '_');
   content = content.replace(/\\~/g, '~');
+
+  // 4.6. Text symbol commands → unicode characters
+  content = content
+    .replace(/\\textbar\s*(\{\})?/g, '|')
+    .replace(/\\textperiodcentered\s*(\{\})?/g, '·')
+    .replace(/\\texteuro\s*(\{\})?/g, '€')
+    .replace(/\\textendash\s*(\{\})?/g, '–')
+    .replace(/\\textemdash\s*(\{\})?/g, '—')
+    .replace(/\\textasciitilde\s*(\{\})?/g, '~')
+    .replace(/\\textbackslash\s*(\{\})?/g, '\\')
+    .replace(/\\LaTeX\b/g, 'LaTeX')
+    .replace(/\\TeX\b/g, 'TeX')
+    .replace(/\\ldots/g, '…')
+    .replace(/\\dots/g, '…');
+
+  // 4.7. \vspace / \hspace → small spacing (not stripped entirely)
+  content = content.replace(/\\vspace\*?\{([^}]*)\}/g, (_, val) => {
+    const neg = val.trim().startsWith('-');
+    if (neg) return '';
+    return '<div style="height: 0.5em;"></div>';
+  });
+  content = content.replace(/\\hspace\*?\{[^}]*\}/g, '&nbsp;');
+
+  // 4.8. \hrule → horizontal rule
+  content = content.replace(/\\hrule/g, '<hr style="border: none; border-top: 1px solid #2A2724; margin: 0.3em 0;">');
+
+  // 4.9. \\ (line break) → <br> — but not inside environments that handle it
+  // Process \\ at end-of-line or followed by whitespace/[ — but be careful not to break tabular
+  content = content.replace(/\\\\\s*(?:\[([^\]]*)\])?\s*(?=\n|$)/gm, '<br>');
+
+  // 4.10. \begin{center}...\end{center}
+  content = content.replace(/\\begin\{center\}/g, '<div style="text-align: center;">');
+  content = content.replace(/\\end\{center\}/g, '</div>');
+
+  // 4.11. \begin{tabular*}{...}{...} ... \end{tabular*} → flex row
+  // This handles the common headerrow pattern: two columns, left-aligned and right-aligned
+  content = content.replace(/\\begin\{tabular\*?\}(?:\{[^}]*\})*\{[^}]*\}([\s\S]*?)\\end\{tabular\*?\}/g, (_, body) => {
+    // Split on & to get columns, split on \\ for rows
+    const rows = body.split(/\\\\/).filter(r => r.trim());
+    const html = rows.map(row => {
+      const cols = row.split('&').map(c => c.trim());
+      if (cols.length >= 2) {
+        return `<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.5em;"><div>${cols[0]}</div><div style="text-align: right; flex-shrink: 0;">${cols[1]}</div></div>`;
+      }
+      return `<div>${cols[0] || ''}</div>`;
+    }).join('');
+    return html;
+  });
+
+  // 4.12. \begin{list}...\end{list}, \begin{indentsection}...\end{indentsection}
+  content = content.replace(/\\begin\{list\}(?:\{[^}]*\})*(?:\{[\s\S]*?\})?/g, '<div style="padding-left: 1em;">');
+  content = content.replace(/\\end\{list\}/g, '</div>');
+  content = content.replace(/\\begin\{indentsection\}\{[^}]*\}/g, '<div style="padding-left: 1em;">');
+  content = content.replace(/\\end\{indentsection\}/g, '</div>');
+
+  // 4.13. Font size commands wrapping text
+  content = content.replace(/\{\\LARGE\s+([^}]*)\}/g, '<span style="font-size: 17pt;">$1</span>');
+  content = content.replace(/\{\\Large\s+([^}]*)\}/g, '<span style="font-size: 14pt;">$1</span>');
+  content = content.replace(/\{\\large\s+([^}]*)\}/g, '<span style="font-size: 12pt;">$1</span>');
+  content = content.replace(/\{\\small\s+([^}]*)\}/g, '<span style="font-size: 9pt;">$1</span>');
+  // Also when used as \\LARGE inside headings
+  content = content.replace(/\\LARGE\s+/g, '');
+  content = content.replace(/\\Large\s+/g, '');
+  content = content.replace(/\\large\s+/g, '');
+  content = content.replace(/\\small\s+/g, '');
+
+  // 4.14. \item[] → item without marker
+  content = content.replace(/\\item\[\]/g, '<li style="list-style: none; margin-left: -1.5em;">');
+  // Keep \item\s* for later processing
 
   // 5. Handle \href{url}{text} → link
   content = content.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, url, text) => {
@@ -863,16 +1014,22 @@ function convertLatexToHTML(latex) {
 
   // 11. Standard LaTeX conversions
   content = content
-    .replace(/\\section\*?\{([^}]*)\}/g, (_, s) => `<h2>${escapeHtml(s)}</h2>`)
-    .replace(/\\subsection\*?\{([^}]*)\}/g, (_, s) => `<h3>${escapeHtml(s)}</h3>`)
-    .replace(/\\subsubsection\*?\{([^}]*)\}/g, (_, s) => `<h4>${escapeHtml(s)}</h4>`)
-    .replace(/\\textbf\{([^}]*)\}/g, (_, s) => `<strong>${escapeHtml(s)}</strong>`)
-    .replace(/\\textit\{([^}]*)\}/g, (_, s) => `<em>${escapeHtml(s)}</em>`)
-    .replace(/\\texttt\{([^}]*)\}/g, (_, s) => `<code>${escapeHtml(s)}</code>`)
-    .replace(/\\emph\{([^}]*)\}/g, (_, s) => `<em>${escapeHtml(s)}</em>`)
-    .replace(/\\begin\{itemize\}/g, '<ul>')
+    .replace(/\\section\*?\{([^}]*)\}/g, (_, s) => `<h2>${s}</h2>`)
+    .replace(/\\subsection\*?\{([^}]*)\}/g, (_, s) => `<h3>${s}</h3>`)
+    .replace(/\\subsubsection\*?\{([^}]*)\}/g, (_, s) => `<h4>${s}</h4>`)
+    .replace(/\\paragraph\*?\{([^}]*)\}/g, (_, s) => `<h5>${s}</h5>`)
+    .replace(/\\textbf\{([^}]*)\}/g, (_, s) => `<strong>${s}</strong>`)
+    .replace(/\\textit\{([^}]*)\}/g, (_, s) => `<em>${s}</em>`)
+    .replace(/\\texttt\{([^}]*)\}/g, (_, s) => `<code>${s}</code>`)
+    .replace(/\\textsc\{([^}]*)\}/g, (_, s) => `<span style="font-variant: small-caps;">${s}</span>`)
+    .replace(/\\emph\{([^}]*)\}/g, (_, s) => `<em>${s}</em>`)
+    .replace(/\\underline\{([^}]*)\}/g, (_, s) => `<u>${s}</u>`)
+    // itemize* (compact, from mdwlist) and itemize with options
+    .replace(/\\begin\{itemize\*\}/g, '<ul class="compact-list">')
+    .replace(/\\end\{itemize\*\}/g, '</ul>')
+    .replace(/\\begin\{itemize\}(?:\[[^\]]*\])?/g, '<ul>')
     .replace(/\\end\{itemize\}/g, '</ul>')
-    .replace(/\\begin\{enumerate\}/g, '<ol>')
+    .replace(/\\begin\{enumerate\}(?:\[[^\]]*\])?/g, '<ol>')
     .replace(/\\end\{enumerate\}/g, '</ol>')
     .replace(/\\item\s*/g, '<li>')
     .replace(/\\begin\{equation\}/g, '\\[')
@@ -1100,6 +1257,10 @@ function convertLatexToHTML(latex) {
 
         br + br { display: none; }
         .page-break-marker { display: none; }
+        .compact-list { margin: 0; padding-left: 1.5em; }
+        .compact-list li { margin: 0; padding: 0; line-height: 1.3; }
+        hr { break-inside: avoid; }
+        h2, h3, h4, h5 { break-after: avoid; }
       </style>
 
       <script>
@@ -2027,7 +2188,7 @@ function saveProjectToLocalStorage() {
 }
 
 /**
- * Load from localStorage
+ * Load from localStorage. Returns true if a project or content was restored.
  */
 function loadFromLocalStorage() {
   try {
@@ -2041,7 +2202,7 @@ function loadFromLocalStorage() {
     // Try to load project first
     if (isProjectMode) {
       const success = loadProjectFromLocalStorage();
-      if (success) return;
+      if (success) return true;
     }
     
     // Fall back to simple document
@@ -2049,10 +2210,88 @@ function loadFromLocalStorage() {
     if (savedContent && savedContent !== DEFAULT_TEMPLATE) {
       state.currentLatex = savedContent;
       elements.editor.value = savedContent;
+      return true;
     }
+
+    return false;
   } catch (error) {
     console.error('Failed to load from localStorage:', error);
+    return false;
   }
+}
+
+/**
+ * Load the last opened project from the backend.
+ * Tries the stored project ID first, then falls back to most recently updated.
+ */
+async function loadLastProjectFromBackend() {
+  try {
+    const lastProjectId = localStorage.getItem('latexEditor_lastProjectId');
+
+    if (lastProjectId) {
+      try {
+        const res = await fetch(`${API_BASE}/projects/${lastProjectId}`);
+        if (res.ok) {
+          const project = await res.json();
+          restoreProject(project);
+          return true;
+        }
+      } catch (e) { /* project may have been deleted */ }
+    }
+
+    // Fall back to most recently updated project
+    const listRes = await fetch(`${API_BASE}/projects`);
+    if (!listRes.ok) return false;
+    const data = await listRes.json();
+    const projects = data.projects || [];
+    if (projects.length === 0) return false;
+
+    // Projects are sorted by updated_at desc from the API
+    const latest = projects[0];
+    const res = await fetch(`${API_BASE}/projects/${latest.id}`);
+    if (!res.ok) return false;
+    const project = await res.json();
+    restoreProject(project);
+    return true;
+  } catch (err) {
+    console.error('Failed to load project from backend:', err);
+    return false;
+  }
+}
+
+/**
+ * Restore a project from API response data into the editor state.
+ */
+function restoreProject(project) {
+  state.projectFiles = project.files || {};
+  state.mainFile = project.main_file;
+  state.currentFile = project.main_file;
+  state.projectMode = true;
+  state.currentProjectId = project.id;
+  state.currentProjectName = project.name;
+
+  const fileContent = state.projectFiles[state.mainFile];
+  if (isBinaryContent(fileContent)) {
+    state.currentLatex = `[Binary file: ${state.mainFile}]`;
+    elements.editor.readOnly = true;
+  } else {
+    state.currentLatex = fileContent || '';
+    elements.editor.readOnly = false;
+  }
+  elements.editor.value = state.currentLatex;
+  elements.currentFileName.textContent = state.mainFile
+    ? state.mainFile.split('/').pop()
+    : 'LaTeX Source';
+
+  buildFileTree(state.projectFiles);
+  elements.fileTree.classList.add('visible');
+  elements.toggleFileTreeBtn.style.display = 'inline-block';
+  elements.downloadZipBtn.style.display = 'inline-block';
+
+  // Save project ID for next restart
+  localStorage.setItem('latexEditor_lastProjectId', project.id);
+
+  showSuccessToast(`Restored project: ${project.name}`);
 }
 
 /**
@@ -3336,6 +3575,7 @@ async function openProject(projectId) {
     buildFileTree(state.projectFiles);
 
     closeProjectsDrawer();
+    localStorage.setItem('latexEditor_lastProjectId', project.id);
     compile();
     showSuccessToast(`Opened project: ${project.name}`);
   } catch (err) {
@@ -3370,7 +3610,6 @@ async function saveProjectToBackend() {
 
   try {
     if (state.currentProjectId) {
-      // Update existing
       const res = await fetch(`${API_BASE}/projects/${state.currentProjectId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -3378,7 +3617,6 @@ async function saveProjectToBackend() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } else {
-      // Create new — prompt for name
       const name = state.currentProjectName || prompt('Enter project name:', 'my-project');
       if (!name) return;
       payload.name = name;
@@ -3394,6 +3632,10 @@ async function saveProjectToBackend() {
       const project = await res.json();
       state.currentProjectId = project.id;
       state.currentProjectName = project.name;
+    }
+    // Remember last project for restart recovery
+    if (state.currentProjectId) {
+      localStorage.setItem('latexEditor_lastProjectId', state.currentProjectId);
     }
   } catch (err) {
     console.error('Failed to save project to backend:', err);
