@@ -706,8 +706,13 @@ function convertLatexToHTML(latex) {
   content = content.replace(/\\%/g, '%');
 
   // 16. Collapse excessive whitespace — remove runs of <br> tags with only whitespace
-  content = content.replace(/(<br\s*\/?>[\s]*){3,}/gi, '<br><br>');
+  content = content.replace(/(<br\s*\/?>[\s]*){3,}/gi, '<br>');
   content = content.replace(/\n\n+/g, '<br>');
+  // Strip <br> immediately after block elements (sections, divs, headings)
+  content = content.replace(/(<\/(?:h[1-6]|div|ul|ol|li|p)>)\s*(?:<br\s*\/?\s*>\s*)+/gi, '$1');
+  content = content.replace(/(<(?:h[1-6]|div)[^>]*>)\s*(?:<br\s*\/?\s*>\s*)+/gi, '$1');
+  // Strip <br> immediately before block elements
+  content = content.replace(/(?:<br\s*\/?\s*>\s*)+\s*(<(?:h[1-6]|div|ul|ol)[^>]*>)/gi, '$1');
 
   return `
     <!DOCTYPE html>
@@ -815,8 +820,8 @@ function convertLatexToHTML(latex) {
           color: #4A6E6B;
           border-bottom: none;
           padding-bottom: 0;
-          margin-top: 0.7em;
-          margin-bottom: 0.3em;
+          margin-top: 0.6em;
+          margin-bottom: 0.1em;
           text-transform: none;
           letter-spacing: 0;
         }
