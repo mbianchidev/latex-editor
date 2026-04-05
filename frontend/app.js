@@ -147,12 +147,8 @@ const elements = {
   previewContainer: document.getElementById('previewContainer'),
   compileBtn: document.getElementById('compileBtn'),
   newDocBtn: document.getElementById('newDoc'),
-  newDropdown: document.getElementById('newDropdown'),
-  newDocItem: document.getElementById('newDocItem'),
-  newProjectItem: document.getElementById('newProjectItem'),
   downloadPdfBtn: document.getElementById('downloadPdf'),
   downloadTexBtn: document.getElementById('downloadTex'),
-  uploadZipBtn: document.getElementById('uploadZip'),
   zipFileInput: document.getElementById('zipFileInput'),
   downloadZipBtn: document.getElementById('downloadZip'),
   zoomInBtn: document.getElementById('zoomIn'),
@@ -186,6 +182,14 @@ const elements = {
   closeDrawer: document.getElementById('closeDrawer'),
   projectsList: document.getElementById('projectsList'),
   drawerGithubBtn: document.getElementById('drawerGithubBtn'),
+  drawerNewProjectBtn: document.getElementById('drawerNewProjectBtn'),
+  // New project modal
+  newProjectModalOverlay: document.getElementById('newProjectModalOverlay'),
+  closeNewProjectModal: document.getElementById('closeNewProjectModal'),
+  newProjectName: document.getElementById('newProjectName'),
+  newProjectBlankBtn: document.getElementById('newProjectBlankBtn'),
+  newProjectMultiBtn: document.getElementById('newProjectMultiBtn'),
+  newProjectZipBtn: document.getElementById('newProjectZipBtn'),
   // GitHub modal
   githubModalOverlay: document.getElementById('githubModalOverlay'),
   closeGithubModal: document.getElementById('closeGithubModal'),
@@ -282,41 +286,39 @@ function initializeEventListeners() {
   // Compile button
   elements.compileBtn.addEventListener('click', compile);
   
-  // New document/project dropdown
-  if (elements.newDocBtn && elements.newDropdown) {
-    elements.newDocBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      elements.newDropdown.classList.toggle('open');
+  // New project button (replaces old dropdown)
+  if (elements.newDocBtn) {
+    elements.newDocBtn.addEventListener('click', openNewProjectModal);
+  }
+
+  // New project modal
+  if (elements.closeNewProjectModal) {
+    elements.closeNewProjectModal.addEventListener('click', closeNewProjectModal);
+  }
+  if (elements.newProjectModalOverlay) {
+    elements.newProjectModalOverlay.addEventListener('click', (e) => {
+      if (e.target === elements.newProjectModalOverlay) closeNewProjectModal();
     });
-    
-    // Close dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-      if (elements.newDropdown && !elements.newDropdown.contains(e.target)) {
-        elements.newDropdown.classList.remove('open');
-      }
+  }
+  if (elements.newProjectBlankBtn) {
+    elements.newProjectBlankBtn.addEventListener('click', () => handleNewProjectCreate('blank'));
+  }
+  if (elements.newProjectMultiBtn) {
+    elements.newProjectMultiBtn.addEventListener('click', () => handleNewProjectCreate('multifile'));
+  }
+  if (elements.newProjectZipBtn) {
+    elements.newProjectZipBtn.addEventListener('click', () => handleNewProjectCreate('zip'));
+  }
+
+  // New project from sidebar
+  if (elements.drawerNewProjectBtn) {
+    elements.drawerNewProjectBtn.addEventListener('click', () => {
+      closeProjectsDrawer();
+      openNewProjectModal();
     });
-    
-    // New document item
-    if (elements.newDocItem) {
-      elements.newDocItem.addEventListener('click', (e) => {
-        e.stopPropagation();
-        elements.newDropdown.classList.remove('open');
-        newDocument();
-      });
-    }
-    
-    // New project item
-    if (elements.newProjectItem) {
-      elements.newProjectItem.addEventListener('click', (e) => {
-        e.stopPropagation();
-        elements.newDropdown.classList.remove('open');
-        newProject();
-      });
-    }
   }
   
-  // ZIP upload
-  elements.uploadZipBtn.addEventListener('click', () => elements.zipFileInput.click());
+  // ZIP upload (hidden input, triggered by modal)
   elements.zipFileInput.addEventListener('change', handleZipUpload);
   
   // Download buttons
@@ -479,6 +481,7 @@ async function compile(isInitial = false) {
       showErrorToast(validationErrors[0].message + (validationErrors.length > 1 ? ` (+${validationErrors.length - 1} more)` : ''));
       showStatus(`${validationErrors.length} error(s) found`, 'error');
       console.error('LaTeX validation errors:\n' + errorMsg);
+      clearPreview(validationErrors);
       return;
     }
 
@@ -502,6 +505,7 @@ async function compile(isInitial = false) {
     console.error('Compilation error:', error);
     showStatus('Compilation failed', 'error');
     showErrorToast(error.message || 'Failed to compile LaTeX document');
+    clearPreview([{ line: '?', message: error.message || 'Compilation failed' }]);
   } finally {
     clearTimeout(loadingTimer);
     state.isCompiling = false;
@@ -615,6 +619,88 @@ function validateLatexSyntax(latex) {
     }
   }
 
+  // Comprehensive set of recognized LaTeX commands (preamble, formatting, structure, CV-class)
+  const allRecognizedCommands = new Set([
+    ...knownCommands,
+    ...LATEX_MATH_COMMANDS,
+    // Preamble-only commands
+    'documentclass', 'usepackage', 'newcommand', 'renewcommand', 'newenvironment',
+    'fontdir', 'colorlet', 'setbool', 'geometry', 'linespread', 'definecolor',
+    'RequirePackage', 'ProvidesClass', 'LoadClass', 'DeclareOption', 'ProcessOptions',
+    'pagestyle', 'thispagestyle', 'setlength', 'setcounter', 'addtocounter',
+    // Formatting & structure
+    'textbf', 'textit', 'texttt', 'textsc', 'textsf', 'textrm', 'textsl',
+    'emph', 'underline', 'uppercase', 'lowercase', 'MakeUppercase', 'MakeLowercase',
+    'tiny', 'scriptsize', 'footnotesize', 'small', 'normalsize',
+    'large', 'Large', 'LARGE', 'huge', 'Huge',
+    'color', 'textcolor', 'colorbox', 'fcolorbox',
+    // References & citations
+    'label', 'ref', 'pageref', 'cite', 'nocite', 'bibliography', 'bibliographystyle',
+    'footnote', 'footnotemark', 'footnotetext',
+    // Floats & figures
+    'caption', 'includegraphics', 'centering', 'raggedleft', 'raggedright',
+    // Structure
+    'chapter', 'paragraph', 'subparagraph', 'part',
+    'section', 'subsection', 'subsubsection',
+    // Spacing & layout
+    'vspace', 'hspace', 'vfill', 'hfill', 'newpage', 'clearpage', 'pagebreak',
+    'noindent', 'indent', 'par', 'linebreak', 'newline',
+    'smallskip', 'medskip', 'bigskip',
+    // Boxes
+    'mbox', 'makebox', 'fbox', 'framebox', 'parbox', 'minipage', 'raisebox',
+    // Misc standard
+    'LaTeX', 'TeX', 'today', 'thanks', 'rule', 'phantom', 'hphantom', 'vphantom',
+    'multicolumn', 'cline', 'hline', 'toprule', 'midrule', 'bottomrule',
+    'usepackage', 'RequirePackage',
+    // CV-class
+    'name', 'position', 'email', 'github', 'linkedin', 'medium', 'bluesky',
+    'cvsection', 'cventry', 'cvskill', 'cvparagraph', 'cvhonor',
+    'makecvheader', 'makecvfooter',
+    // Links & misc
+    'href', 'url', 'input', 'include', 'item',
+    'maketitle', 'tableofcontents', 'listoffigures', 'listoftables',
+    'appendix', 'frontmatter', 'mainmatter', 'backmatter',
+    'enskip', 'cdotp', 'thepage',
+  ]);
+
+  // Parse user-defined commands from the preamble
+  const preamble = latex.match(/^([\s\S]*?)\\begin\{document\}/);
+  if (preamble) {
+    const newcmdPattern = /\\(?:newcommand|renewcommand|providecommand)\s*\{?\\([a-zA-Z]+)\}?/g;
+    let ncMatch;
+    while ((ncMatch = newcmdPattern.exec(preamble[1])) !== null) {
+      allRecognizedCommands.add(ncMatch[1]);
+    }
+  }
+
+  // Detect unknown \command{...} patterns in the document body (warning, not blocking)
+  const docBodyMatch = latex.match(/\\begin\{document\}([\s\S]*?)\\end\{document\}/);
+  if (docBodyMatch) {
+    const bodyLines = docBodyMatch[1].split('\n');
+    const bodyStartLine = latex.substring(0, latex.indexOf('\\begin{document}')).split('\n').length;
+    const unknownCmdPattern = /\\([a-zA-Z]+)\s*\{/g;
+
+    for (let i = 0; i < bodyLines.length; i++) {
+      const bLine = bodyLines[i];
+      if (/^\s*%/.test(bLine)) continue;
+      const activeBLine = bLine.replace(/([^\\])%.*$/, '$1');
+      let ucMatch;
+      unknownCmdPattern.lastIndex = 0;
+      while ((ucMatch = unknownCmdPattern.exec(activeBLine)) !== null) {
+        const cmd = ucMatch[1];
+        if (!allRecognizedCommands.has(cmd)) {
+          errors.push({
+            line: bodyStartLine + i,
+            column: ucMatch.index + 1,
+            command: cmd,
+            message: `Command "\\${cmd}" is not supported in preview (line ${bodyStartLine + i})`,
+            suggestion: '',
+          });
+        }
+      }
+    }
+  }
+
   return errors;
 }
 
@@ -703,9 +789,9 @@ function convertLatexToHTML(latex) {
     .replace(/\\vspace\*?\{[^}]*\}/g, '')
     .replace(/\\hspace\*?\{[^}]*\}/g, '')
     .replace(/\\vfill/g, '')
-    .replace(/\\newpage/g, '')
-    .replace(/\\clearpage/g, '')
-    .replace(/\\pagebreak/g, '')
+    .replace(/\\newpage/g, '<div class="page-break-marker"></div>')
+    .replace(/\\clearpage/g, '<div class="page-break-marker"></div>')
+    .replace(/\\pagebreak/g, '<div class="page-break-marker"></div>')
     .replace(/\\noindent/g, '')
     .replace(/\\centering/g, '')
     .replace(/\\fontdir(\[[^\]]*\])?\{[^}]*\}/g, '')
@@ -828,15 +914,50 @@ function convertLatexToHTML(latex) {
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Source+Serif+4:wght@300;400;600&display=swap');
 
+        *, *::before, *::after { box-sizing: border-box; }
+
         body {
           font-family: 'Source Serif 4', Georgia, serif;
           font-size: 10pt;
           line-height: 1.45;
-          max-width: 8.5in;
-          margin: 0.4in auto;
-          padding: 0 0.5in;
           color: #2A2724;
+          background: #e8e4de;
+          margin: 0;
+          padding: 20px 0;
+        }
+
+        .page {
+          width: 8.5in;
+          min-height: 11in;
+          margin: 0 auto 24px auto;
+          padding: 0.4in 0.5in;
           background: white;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.12), 0 1px 3px rgba(0,0,0,0.08);
+          position: relative;
+          overflow: hidden;
+        }
+
+        .page-number {
+          position: absolute;
+          bottom: 0.3in;
+          left: 0;
+          right: 0;
+          text-align: center;
+          font-size: 8pt;
+          color: #888;
+          font-family: 'Source Serif 4', Georgia, serif;
+        }
+
+        @media print {
+          body { background: white; padding: 0; margin: 0; }
+          .page {
+            box-shadow: none;
+            margin: 0;
+            page-break-after: always;
+            min-height: auto;
+          }
+          .page:last-child { page-break-after: avoid; }
+          .page-number { display: none; }
         }
 
         h1, h2, h3, h4 {
@@ -937,7 +1058,7 @@ function convertLatexToHTML(latex) {
           height: 1px;
           background: #B0ACA4;
         }
-        .cv-entry { margin-bottom: 0.5em; }
+        .cv-entry { margin-bottom: 0.5em; break-inside: avoid; }
         .cv-entry-header, .cv-entry-subheader {
           display: flex;
           justify-content: space-between;
@@ -978,6 +1099,7 @@ function convertLatexToHTML(latex) {
         .cv-items li { margin: 0.02em 0; font-size: 9.5pt; }
 
         br + br { display: none; }
+        .page-break-marker { display: none; }
       </style>
 
       <script>
@@ -996,13 +1118,184 @@ function convertLatexToHTML(latex) {
       <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     </head>
     <body>
-      ${title ? `<h1>${title}</h1>` : ''}
-      ${subtitle ? `<div class="author">${subtitle}</div>` : ''}
-      ${contactLine ? `<div class="date">${contactLine}</div>` : ''}
-      ${content}
+      <div class="page" id="page-1">
+        ${title ? `<h1>${title}</h1>` : ''}
+        ${subtitle ? `<div class="author">${subtitle}</div>` : ''}
+        ${contactLine ? `<div class="date">${contactLine}</div>` : ''}
+        ${content}
+      </div>
+
+      <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        requestAnimationFrame(() => { setTimeout(paginate, 500); });
+      });
+
+      function wrapTextNodes(parent) {
+        const nodes = Array.from(parent.childNodes);
+        let buffer = [];
+        const groups = [];
+        for (const node of nodes) {
+          const isBlock = node.nodeType === 1 &&
+            window.getComputedStyle(node).display !== 'inline';
+          if (isBlock) {
+            if (buffer.length) { groups.push(buffer); buffer = []; }
+            groups.push([node]);
+          } else if (node.nodeType === 3 && !node.textContent.trim()) {
+            // skip whitespace-only text
+          } else {
+            buffer.push(node);
+          }
+        }
+        if (buffer.length) groups.push(buffer);
+
+        while (parent.firstChild) parent.removeChild(parent.firstChild);
+        for (const group of groups) {
+          if (group.length === 1 && group[0].nodeType === 1 &&
+              window.getComputedStyle(group[0]).display !== 'inline') {
+            parent.appendChild(group[0]);
+          } else {
+            const w = document.createElement('div');
+            group.forEach(n => w.appendChild(n));
+            parent.appendChild(w);
+          }
+        }
+      }
+
+      function paginate() {
+        const PAGE_HEIGHT = 11 * 96;
+        const PADDING_V  = 0.4 * 96;
+        const FOOTER_H   = 0.35 * 96;
+        const USABLE     = PAGE_HEIGHT - 2 * PADDING_V - FOOTER_H;
+
+        const firstPage = document.getElementById('page-1');
+        if (!firstPage) return;
+
+        wrapTextNodes(firstPage);
+
+        const children = Array.from(firstPage.children);
+        const pages = [firstPage];
+        children.forEach(c => firstPage.removeChild(c));
+
+        let currentPage = firstPage;
+        let currentHeight = 0;
+
+        function newPage() {
+          const page = document.createElement('div');
+          page.className = 'page';
+          document.body.appendChild(page);
+          pages.push(page);
+          currentHeight = 0;
+          return page;
+        }
+
+        for (const child of children) {
+          if (child.classList && child.classList.contains('page-break-marker')) {
+            currentPage = newPage();
+            continue;
+          }
+
+          currentPage.appendChild(child);
+          const childHeight = child.getBoundingClientRect().height;
+
+          if (currentHeight + childHeight > USABLE && currentHeight > 0) {
+            currentPage.removeChild(child);
+            currentPage = newPage();
+            currentPage.appendChild(child);
+            currentHeight = child.getBoundingClientRect().height;
+          } else {
+            currentHeight += childHeight;
+          }
+        }
+
+        const total = pages.length;
+        pages.forEach((page, i) => {
+          page.id = 'page-' + (i + 1);
+          const num = document.createElement('div');
+          num.className = 'page-number';
+          num.textContent = (i + 1) + ' / ' + total;
+          page.appendChild(num);
+        });
+
+        if (window.parent !== window) {
+          window.parent.postMessage({ type: 'latex-page-count', count: total }, '*');
+        }
+      }
+      </script>
     </body>
     </html>
   `;
+}
+
+/**
+ * Process inline LaTeX commands in CV field text to produce clean HTML.
+ * Strips formatting commands like \textbf, \textit while preserving their content,
+ * removes remaining \command{arg} → arg, and cleans stray braces.
+ */
+function processCvFieldText(text) {
+  if (!text) return '';
+  let t = text;
+  // Strip \color{...} using balanced brace extraction
+  t = processBalancedCmd(t, 'color', () => '');
+  // \textbf{...} → <strong>...</strong>
+  t = processBalancedCmd(t, 'textbf', inner => `<strong>${processCvFieldText(inner)}</strong>`);
+  // \textit{...} / \emph{...} → <em>...</em>
+  t = processBalancedCmd(t, 'textit', inner => `<em>${processCvFieldText(inner)}</em>`);
+  t = processBalancedCmd(t, 'emph', inner => `<em>${processCvFieldText(inner)}</em>`);
+  // \texttt{...} → <code>...</code>
+  t = processBalancedCmd(t, 'texttt', inner => `<code>${processCvFieldText(inner)}</code>`);
+  // \href{url}{text}
+  t = t.replace(/\\href/g, (_, offset) => {
+    const urlGroup = extractBraceGroup(t, offset + 5);
+    if (!urlGroup) return _;
+    const textGroup = extractBraceGroup(t, urlGroup.end);
+    if (!textGroup) return _;
+    return ''; // handled below
+  });
+  // Manual \href handling with balanced braces
+  let hrefIdx;
+  while ((hrefIdx = t.indexOf('\\href')) !== -1) {
+    const urlGroup = extractBraceGroup(t, hrefIdx + 5);
+    if (!urlGroup) break;
+    const textGroup = extractBraceGroup(t, urlGroup.end);
+    if (!textGroup) break;
+    const url = escapeHtml(urlGroup.value);
+    const linkText = processCvFieldText(textGroup.value);
+    t = t.substring(0, hrefIdx) + `<a href="${url}" target="_blank" rel="noopener">${linkText}</a>` + t.substring(textGroup.end);
+  }
+  // Strip any remaining \command{arg} → arg (using balanced braces)
+  const cmdRe = /\\([a-zA-Z]+)/g;
+  let cmdMatch;
+  while ((cmdMatch = cmdRe.exec(t)) !== null) {
+    if (LATEX_MATH_COMMANDS.includes(cmdMatch[1])) continue;
+    const braceGroup = extractBraceGroup(t, cmdMatch.index + cmdMatch[0].length);
+    if (braceGroup) {
+      t = t.substring(0, cmdMatch.index) + braceGroup.value + t.substring(braceGroup.end);
+      cmdRe.lastIndex = cmdMatch.index;
+    } else {
+      t = t.substring(0, cmdMatch.index) + t.substring(cmdMatch.index + cmdMatch[0].length);
+      cmdRe.lastIndex = cmdMatch.index;
+    }
+  }
+  // Remove stray braces
+  t = t.replace(/\{([^{}]*)\}/g, '$1');
+  return t.trim();
+}
+
+/**
+ * Process a specific \command{...} using balanced brace extraction.
+ * Calls replacer(innerContent) for each match.
+ */
+function processBalancedCmd(str, cmdName, replacer) {
+  const pattern = new RegExp('\\\\' + cmdName + '(?![a-zA-Z])');
+  let match;
+  while ((match = str.match(pattern)) !== null) {
+    const cmdStart = match.index;
+    const group = extractBraceGroup(str, cmdStart + match[0].length);
+    if (!group) break;
+    const replacement = replacer(group.value);
+    str = str.substring(0, cmdStart) + replacement + str.substring(group.end);
+  }
+  return str;
 }
 
 /**
@@ -1029,30 +1322,31 @@ function parseCvEntries(content) {
     }
 
     if (args.length >= 2) {
-      const org = (args[0] || '').replace(/\\color\{[^}]*\}/g, '');
-      const role = (args[1] || '').replace(/\\color\{[^}]*\}/g, '');
-      const location = (args[2] || '').replace(/\\color\{[^}]*\}/g, '');
-      const dates = (args[3] || '').replace(/\\color\{[^}]*\}/g, '');
+      const org = args[0] || '';
+      const role = args[1] || '';
+      const location = args[2] || '';
+      const dates = args[3] || '';
       const body = args[4] || '';
 
-      // Process \href inside org/role
+      // Process \href inside org/role, then clean remaining LaTeX commands
       const processedOrg = org.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, u, t) =>
-        `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${escapeHtml(t.replace(/\\color\{[^}]*\}/g, ''))}</a>`
+        `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${processCvFieldText(t)}</a>`
       );
+      const orgHtml = processedOrg.includes('<a ') ? processedOrg : processCvFieldText(org);
+
       const processedRole = role.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, u, t) =>
-        `<a href="${escapeHtml(u)}" target="_blank" rel="noopener" class="cv-entry-role-link">${escapeHtml(t.replace(/\\color\{[^}]*\}/g, ''))}</a>`
+        `<a href="${escapeHtml(u)}" target="_blank" rel="noopener" class="cv-entry-role-link">${processCvFieldText(t)}</a>`
       );
-      // If role still has unprocessed text (no href), escape it
-      const roleHtml = processedRole.includes('<a ') ? processedRole.trim() : escapeHtml(role.trim());
+      const roleHtml = processedRole.includes('<a ') ? processedRole : processCvFieldText(role);
 
       const html = `<div class="cv-entry">
         <div class="cv-entry-header">
           <div class="cv-entry-left"><span class="cv-entry-role">${roleHtml}</span></div>
-          ${location.trim() ? `<div class="cv-entry-right"><em>${escapeHtml(location.trim())}</em></div>` : ''}
+          ${location.trim() ? `<div class="cv-entry-right"><em>${processCvFieldText(location)}</em></div>` : ''}
         </div>
         ${org.trim() || dates.trim() ? `<div class="cv-entry-subheader">
-          <div class="cv-entry-left"><span class="cv-entry-org">${processedOrg.trim()}</span></div>
-          ${dates.trim() ? `<div class="cv-entry-right"><em>${escapeHtml(dates.trim())}</em></div>` : ''}
+          <div class="cv-entry-left"><span class="cv-entry-org">${orgHtml}</span></div>
+          ${dates.trim() ? `<div class="cv-entry-right"><em>${processCvFieldText(dates)}</em></div>` : ''}
         </div>` : ''}
         <div class="cv-entry-body">${body}</div>
       </div>`;
@@ -1091,9 +1385,9 @@ function parseCvSkills(content) {
     }
 
     if (args.length >= 2) {
-      const cat = args[0].replace(/\\color\{[^}]*\}/g, '').trim();
-      const skills = args[1].replace(/\\color\{[^}]*\}/g, '').trim();
-      const html = `<div class="cv-skill"><span class="cv-skill-label">${escapeHtml(cat)}</span><span class="cv-skill-value">${escapeHtml(skills)}</span></div>`;
+      const cat = processCvFieldText(args[0]);
+      const skills = processCvFieldText(args[1]);
+      const html = `<div class="cv-skill"><span class="cv-skill-label">${cat}</span><span class="cv-skill-value">${skills}</span></div>`;
       replacements.push({ start: startPos, end: pos, html });
     }
   }
@@ -1111,34 +1405,88 @@ function parseCvSkills(content) {
 // ============================================
 
 /**
- * Render the compiled HTML into the preview panel.
- * Uses document.write into a fresh iframe — avoids srcdoc/blob onload loops.
+ * Clear the preview panel and show compilation errors.
  */
-function renderPDF(htmlString, generation) {
-  // Stale check
-  if (generation !== state.compileGeneration) return;
+function clearPreview(errors) {
+  state.pdfData = null;
+  state.lastHtmlContent = null;
 
-  // Remove all existing children (old iframes, welcome message)
   while (elements.previewContent.firstChild) {
     elements.previewContent.removeChild(elements.previewContent.firstChild);
   }
 
-  // Create a fresh iframe
+  const errorDiv = document.createElement('div');
+  errorDiv.style.cssText = 'padding: 2em; font-family: "JetBrains Mono", monospace; font-size: 10pt; color: #c0392b; background: #fdf2f2; border: 1px solid #e6b0aa; border-radius: 4px; margin: 1em;';
+  const heading = document.createElement('h3');
+  heading.style.cssText = 'margin: 0 0 0.8em 0; color: #922b21; font-size: 12pt;';
+  heading.textContent = `Compilation failed — ${errors.length} error(s)`;
+  errorDiv.appendChild(heading);
+
+  const list = document.createElement('ul');
+  list.style.cssText = 'margin: 0; padding-left: 1.5em; list-style: none;';
+  for (const err of errors) {
+    const li = document.createElement('li');
+    li.style.cssText = 'margin: 0.3em 0; line-height: 1.4;';
+    li.textContent = `Line ${err.line}: ${err.message}`;
+    list.appendChild(li);
+  }
+  errorDiv.appendChild(list);
+  elements.previewContent.appendChild(errorDiv);
+}
+
+/**
+ * Render the compiled HTML into the preview panel.
+ * Uses document.write into a fresh iframe — avoids srcdoc/blob onload loops.
+ */
+function renderPDF(htmlString, generation) {
+  if (generation !== state.compileGeneration) return;
+
+  while (elements.previewContent.firstChild) {
+    elements.previewContent.removeChild(elements.previewContent.firstChild);
+  }
+
   const iframe = document.createElement('iframe');
-  iframe.style.width = '100%';
-  iframe.style.minHeight = '11in';
+  iframe.style.width = '8.5in';
   iframe.style.border = 'none';
-  iframe.style.background = 'white';
-  iframe.style.boxShadow = '0 20px 25px rgba(42, 39, 36, 0.1), 0 10px 10px rgba(42, 39, 36, 0.04)';
-  iframe.style.borderRadius = '2px';
+  iframe.style.background = 'transparent';
+  iframe.style.display = 'block';
+  iframe.style.margin = '0 auto';
 
   elements.previewContent.appendChild(iframe);
 
-  // Write content directly — no onload needed
   const doc = iframe.contentDocument || iframe.contentWindow.document;
   doc.open();
   doc.write(htmlString);
   doc.close();
+
+  // Listen for page count — remove any previous listener first
+  if (state._pageCountListener) {
+    window.removeEventListener('message', state._pageCountListener);
+  }
+  state._pageCountListener = function onMsg(e) {
+    if (e.data && e.data.type === 'latex-page-count' && e.source === iframe.contentWindow) {
+      window.removeEventListener('message', onMsg);
+      state._pageCountListener = null;
+      state.pageCount = e.data.count;
+    }
+  };
+  window.addEventListener('message', state._pageCountListener);
+
+  // Auto-resize iframe to fit all paginated content
+  const resizeIframe = () => {
+    try {
+      const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+      if (iframeDoc && iframeDoc.body) {
+        const height = iframeDoc.body.scrollHeight;
+        iframe.style.height = height + 'px';
+      }
+    } catch (e) { /* cross-origin guard */ }
+  };
+
+  // Resize after initial render and after pagination script runs
+  setTimeout(resizeIframe, 100);
+  setTimeout(resizeIframe, 700);
+  setTimeout(resizeIframe, 1500);
 
   applyZoom();
 }
@@ -1158,9 +1506,9 @@ function applyZoom() {
   if (iframe) {
     iframe.style.transform = `scale(${state.zoom})`;
     iframe.style.transformOrigin = 'top center';
-    // Adjust spacing: 11 inches (A4 page height) * 96 DPI = pixels
-    const pageHeightPixels = 11 * 96;
-    iframe.style.marginBottom = `${(state.zoom - 1) * pageHeightPixels}px`;
+    // Estimate total height and adjust margin to prevent cutoff
+    const iframeHeight = parseFloat(iframe.style.height) || (11 * 96);
+    iframe.style.marginBottom = `${(state.zoom - 1) * iframeHeight}px`;
   }
 }
 
@@ -1290,71 +1638,17 @@ function downloadTeX() {
 }
 
 // ============================================
-// NEW DOCUMENT
+// NEW PROJECT (unified — single files are also projects)
 // ============================================
 
-function newDocument() {
-  if (state.currentLatex !== DEFAULT_TEMPLATE && 
-      !confirm('Create new document? Current changes will be lost.')) {
-    return;
-  }
-  
-  // Save current project to backend before switching
-  if (state.projectMode && state.currentProjectId) {
-    saveProjectToBackend();
-  }
-  
-  // Reset project state (keep currentProjectId — project still exists in DB)
-  state.projectMode = false;
-  state.projectFiles = {};
-  state.currentFile = null;
-  state.mainFile = null;
-  state.currentProjectId = null;
-  state.currentProjectName = null;
-  
-  state.currentLatex = DEFAULT_TEMPLATE;
-  elements.editor.value = DEFAULT_TEMPLATE;
-  elements.editor.readOnly = false;
-  elements.currentFileName.textContent = 'LaTeX Source';
-  
-  // Hide file tree and download ZIP button
-  elements.fileTree.classList.remove('visible');
-  elements.toggleFileTreeBtn.style.display = 'none';
-  elements.downloadZipBtn.style.display = 'none';
-  
-  // Clear project from localStorage
-  try {
-    localStorage.removeItem('latexEditor_project');
-    localStorage.removeItem('latexEditor_projectMode');
-  } catch (error) {
-    console.error('Failed to clear project from localStorage:', error);
-  }
-  
-  saveToLocalStorage();
-  
-  // Compile the new document
-  compile(true);
-}
-
 /**
- * Create a new multi-file project from scratch
+ * Create a new blank single-file project (just main.tex)
  */
-function newProject() {
-  const projectName = prompt('Enter project name:', 'my-project');
-  if (!projectName) return;
-  
-  if (state.projectMode && Object.keys(state.projectFiles).length > 0 &&
-      !confirm('Create new project? You will switch away from the current project.')) {
-    return;
-  }
-  
-  // Save current project to backend before switching
+function createBlankProject(projectName) {
   if (state.projectMode && state.currentProjectId) {
     saveProjectToBackend();
   }
-  
-  // Create basic project structure
-  // Convert project name to title case and escape LaTeX special characters
+
   const projectTitle = escapeLatex(
     projectName
       .replace(/-/g, ' ')
@@ -1363,7 +1657,67 @@ function newProject() {
       .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(' ')
   );
-  
+
+  const mainContent = `\\documentclass{article}
+\\usepackage[utf8]{inputenc}
+\\usepackage{amsmath}
+\\usepackage{graphicx}
+
+\\title{${projectTitle}}
+\\author{Your Name}
+\\date{\\today}
+
+\\begin{document}
+
+\\maketitle
+
+\\section{Introduction}
+
+Start writing your document here.
+
+\\end{document}
+`;
+
+  state.projectFiles = { 'main.tex': mainContent };
+  state.mainFile = 'main.tex';
+  state.currentFile = 'main.tex';
+  state.projectMode = true;
+  state.currentLatex = mainContent;
+
+  elements.editor.value = mainContent;
+  elements.editor.readOnly = false;
+  elements.currentFileName.textContent = 'main.tex';
+
+  buildFileTree(state.projectFiles);
+  elements.fileTree.classList.add('visible');
+  elements.toggleFileTreeBtn.style.display = 'inline-block';
+  elements.downloadZipBtn.style.display = 'inline-block';
+
+  saveProjectToLocalStorage();
+  state.currentProjectName = projectName;
+  saveProjectToBackend();
+
+  showSuccessToast(`Created project: ${projectName}`);
+  compile(true);
+}
+
+/**
+ * Create a new multi-file project with sections/ structure
+ */
+function createMultiFileProject(projectName) {
+  if (state.projectMode && state.currentProjectId) {
+    saveProjectToBackend();
+  }
+
+  const projectTitle = escapeLatex(
+    projectName
+      .replace(/-/g, ' ')
+      .replace(/_/g, ' ')
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ')
+  );
+
   const mainContent = `\\documentclass{article}
 \\usepackage[utf8]{inputenc}
 \\usepackage{amsmath}
@@ -1395,40 +1749,77 @@ This is your new LaTeX project. Edit this file or create new sections.
 \\end{itemize}
 `;
 
-  // Initialize project files
   state.projectFiles = {
     'main.tex': mainContent,
-    'sections/introduction.tex': introContent
+    'sections/introduction.tex': introContent,
   };
-  
+
   state.mainFile = 'main.tex';
   state.currentFile = 'main.tex';
   state.projectMode = true;
   state.currentLatex = mainContent;
-  
-  // Update UI
+
   elements.editor.value = mainContent;
   elements.editor.readOnly = false;
   elements.currentFileName.textContent = 'main.tex';
-  
-  // Build and show file tree
+
   buildFileTree(state.projectFiles);
   elements.fileTree.classList.add('visible');
   elements.toggleFileTreeBtn.style.display = 'inline-block';
   elements.downloadZipBtn.style.display = 'inline-block';
-  
-  // Save project to localStorage
+
   saveProjectToLocalStorage();
-  
-  // Save to backend
   state.currentProjectName = projectName;
   saveProjectToBackend();
-  
+
   showSuccessToast(`Created project: ${projectName}`);
-  
-  // Compile the new project
   compile(true);
 }
+
+/**
+ * Open the new project modal.
+ * Replaces the old separate newDocument() / newProject() flows.
+ */
+function openNewProjectModal() {
+  if (state.projectMode && Object.keys(state.projectFiles).length > 0 &&
+      state.currentLatex !== DEFAULT_TEMPLATE &&
+      !confirm('Create new project? You will switch away from the current project.')) {
+    return;
+  }
+  elements.newProjectModalOverlay.style.display = 'flex';
+  elements.newProjectName.value = '';
+  elements.newProjectName.focus();
+}
+
+function closeNewProjectModal() {
+  elements.newProjectModalOverlay.style.display = 'none';
+}
+
+function handleNewProjectCreate(type) {
+  const name = elements.newProjectName.value.trim();
+  if (!name) {
+    showErrorToast('Please enter a project name');
+    elements.newProjectName.focus();
+    return;
+  }
+
+  closeNewProjectModal();
+  closeProjectsDrawer();
+
+  if (type === 'blank') {
+    createBlankProject(name);
+  } else if (type === 'multifile') {
+    createMultiFileProject(name);
+  } else if (type === 'zip') {
+    // Store the name for the zip upload handler, then trigger file picker
+    state._pendingProjectName = name;
+    elements.zipFileInput.click();
+  }
+}
+
+// Keep newDocument/newProject as aliases for backward compat (event listeners)
+function newDocument() { openNewProjectModal(); }
+function newProject() { openNewProjectModal(); }
 
 // ============================================
 // LOCAL STORAGE
@@ -1934,7 +2325,10 @@ function cleanCurrentProject() {
 
 async function handleZipUpload(event) {
   const file = event.target.files[0];
-  if (!file) return;
+  if (!file) {
+    state._pendingProjectName = null;
+    return;
+  }
   
   // Save current project to backend before loading a new one
   if (state.projectMode && state.currentProjectId) {
@@ -1942,6 +2336,7 @@ async function handleZipUpload(event) {
   }
   
   if (!file.name.endsWith('.zip')) {
+    state._pendingProjectName = null;
     showErrorToast('Please upload a ZIP file');
     return;
   }
@@ -2078,8 +2473,9 @@ async function handleZipUpload(event) {
     // Auto-save project to localStorage after loading
     saveProjectToLocalStorage();
     
-    // Save to backend — prompt for project name
-    const projectName = prompt('Enter project name:', file.name.replace(/\.zip$/i, ''));
+    // Use name from the new project modal if available, otherwise prompt
+    const projectName = state._pendingProjectName || prompt('Enter project name:', file.name.replace(/\.zip$/i, ''));
+    state._pendingProjectName = null;
     if (projectName && projectName.trim()) {
       const payload = {
         name: projectName.trim(),
