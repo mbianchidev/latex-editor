@@ -469,6 +469,19 @@ async function compile(isInitial = false) {
       latexContent = resolveIncludes(latexContent, state.mainFile);
     }
     
+    // Validate LaTeX syntax before compilation
+    const validationErrors = validateLatexSyntax(latexContent);
+    if (validationErrors.length > 0) {
+      clearTimeout(loadingTimer);
+      hideLoading();
+      state.isCompiling = false;
+      const errorMsg = validationErrors.map(e => `Line ${e.line}: ${e.message}`).join('\n');
+      showErrorToast(validationErrors[0].message + (validationErrors.length > 1 ? ` (+${validationErrors.length - 1} more)` : ''));
+      showStatus(`${validationErrors.length} error(s) found`, 'error');
+      console.error('LaTeX validation errors:\n' + errorMsg);
+      return;
+    }
+
     // Use a simple LaTeX to HTML converter for demo purposes
     // In production, you would use SwiftLaTeX or similar
     const htmlContent = await compileLatexToBlob(latexContent);
@@ -525,6 +538,84 @@ function extractBraceGroup(str, startPos) {
     }
   }
   return null;
+}
+
+/**
+ * Validate LaTeX syntax and return errors.
+ * Detects common mistakes like missing backslashes before commands.
+ */
+function validateLatexSyntax(latex) {
+  const errors = [];
+  const lines = latex.split('\n');
+
+  // Known LaTeX commands that require a leading backslash
+  const knownCommands = [
+    'documentclass', 'usepackage', 'begin', 'end', 'title', 'author', 'date',
+    'maketitle', 'section', 'subsection', 'subsubsection', 'textbf', 'textit',
+    'texttt', 'emph', 'href', 'includegraphics', 'input', 'include',
+    'newcommand', 'renewcommand', 'newenvironment',
+    'name', 'position', 'email', 'github', 'linkedin', 'medium', 'bluesky',
+    'cvsection', 'cventry', 'cvskill', 'cvparagraph',
+    'makecvheader', 'makecvfooter', 'fontdir', 'colorlet', 'setbool',
+    'geometry', 'linespread', 'definecolor', 'color',
+    'item', 'label', 'ref', 'cite', 'bibliography', 'bibliographystyle',
+    'footnote', 'caption', 'centering', 'noindent',
+    'vspace', 'hspace', 'newpage', 'clearpage', 'pagebreak',
+  ];
+
+  const commandPattern = new RegExp(
+    '(?:^|[^a-zA-Z\\\\])(' + knownCommands.join('|') + ')\\s*[{\\[]',
+    'gm'
+  );
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
+
+    // Skip comment lines
+    if (/^\s*%/.test(line)) continue;
+
+    // Strip inline comments for analysis
+    const activeLine = line.replace(/([^\\])%.*$/, '$1');
+
+    // Check for known commands without leading backslash
+    let match;
+    commandPattern.lastIndex = 0;
+    while ((match = commandPattern.exec(activeLine)) !== null) {
+      const cmd = match[1];
+      const pos = match.index + match[0].indexOf(cmd);
+
+      // Check if preceded by a backslash
+      if (pos > 0 && activeLine[pos - 1] === '\\') continue;
+
+      errors.push({
+        line: lineNum,
+        column: pos + 1,
+        command: cmd,
+        message: `Missing backslash: "${cmd}{" should be "\\${cmd}{" (line ${lineNum})`,
+        suggestion: `\\${cmd}`,
+      });
+    }
+
+    // Check for unmatched \begin without corresponding \end (basic check)
+    const begins = (activeLine.match(/\\begin\{([^}]+)\}/g) || []);
+    for (const b of begins) {
+      const envName = b.match(/\\begin\{([^}]+)\}/)[1];
+      // Only flag if the entire document doesn't have a matching \end
+      const endPattern = new RegExp(`\\\\end\\{${envName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`);
+      if (!endPattern.test(latex)) {
+        errors.push({
+          line: lineNum,
+          column: activeLine.indexOf(b) + 1,
+          command: 'begin',
+          message: `Unmatched \\begin{${envName}} — missing \\end{${envName}} (line ${lineNum})`,
+          suggestion: `\\end{${envName}}`,
+        });
+      }
+    }
+  }
+
+  return errors;
 }
 
 /**
@@ -721,7 +812,7 @@ function convertLatexToHTML(latex) {
   content = content.replace(/\\%/g, '%');
 
   // 16. Collapse excessive whitespace — remove runs of <br> tags with only whitespace
-  content = content.replace(/(<br\s*\/?>[\s]*){3,}/gi, '<br>');
+  content = content.replace(/(?:<br\s*\/?\s*>[\t ]*\n?){3,}/gi, '<br>');
   content = content.replace(/\n\n+/g, '<br>');
   // Strip <br> immediately after block elements (sections, divs, headings)
   content = content.replace(/(<\/(?:h[1-6]|div|ul|ol|li|p)>)\s*(?:<br\s*\/?\s*>\s*)+/gi, '$1');
@@ -1100,14 +1191,11 @@ function downloadPDF() {
     exportIframe.style.left = '-9999px';
     document.body.appendChild(exportIframe);
 
-    const exportDoc = exportIframe.contentDocument || exportIframe.contentWindow.document;
-    exportDoc.open();
-    exportDoc.write(htmlContent);
-    exportDoc.close();
-
+    // Attach onload BEFORE writing to avoid race condition
     exportIframe.onload = () => {
       setTimeout(() => {
         try {
+          const exportDoc = exportIframe.contentDocument || exportIframe.contentWindow.document;
           const exportBody = exportDoc.body;
 
           html2canvas(exportBody, {
@@ -1146,7 +1234,6 @@ function downloadPDF() {
             hideLoading();
             console.error('PDF generation error:', error);
 
-            // Fallback: open print dialog via a fresh window
             const printWindow = window.open('', '_blank');
             if (printWindow) {
               printWindow.document.write(htmlContent);
@@ -1171,6 +1258,12 @@ function downloadPDF() {
       hideLoading();
       showErrorToast('Failed to render content for PDF export');
     };
+
+    // Write content AFTER attaching onload/onerror handlers
+    const exportDoc = exportIframe.contentDocument || exportIframe.contentWindow.document;
+    exportDoc.open();
+    exportDoc.write(htmlContent);
+    exportDoc.close();
   } catch (error) {
     hideLoading();
     console.error('PDF download error:', error);
@@ -1419,8 +1512,8 @@ function sanitizeFilename(name) {
   const trimmed = name.trim();
   if (!trimmed) return null;
 
-  // Reject path traversal
-  if (trimmed.includes('..') || trimmed.startsWith('/') || trimmed.includes('\\')) return null;
+  // Reject path traversal and path separators; only allow a single filename
+  if (trimmed.includes('..') || trimmed.includes('/') || trimmed.includes('\\')) return null;
 
   // Reject control characters
   if (/[\x00-\x1f\x7f]/.test(trimmed)) return null;

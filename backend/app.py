@@ -20,9 +20,13 @@ app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # Restrict CORS to same-origin via nginx proxy only
-ALLOWED_ORIGINS = os.environ.get(
-    "CORS_ORIGINS", "http://localhost,http://localhost:80"
-).split(",")
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CORS_ORIGINS", "http://localhost,http://localhost:80"
+    ).split(",")
+    if origin.strip()
+]
 CORS(app, origins=ALLOWED_ORIGINS)
 
 # Reject request bodies larger than 10 MB (projects can include fonts/images)
@@ -36,7 +40,13 @@ MAX_CONTENT_LENGTH = int(os.environ.get("MAX_DOC_CONTENT_LENGTH", str(1024 * 102
 MAX_TITLE_LENGTH = 256
 MAX_PROJECTS = int(os.environ.get("MAX_PROJECTS", "50"))
 MAX_PROJECT_NAME_LENGTH = 128
-DB_PATH = os.environ.get("DB_PATH", "/data/projects.db")
+
+# DB_PATH: use /data in Docker, fall back to temp dir in CI/local
+_default_db = "/data/projects.db"
+if not os.path.isdir("/data") and not os.environ.get("DB_PATH"):
+    import tempfile
+    _default_db = os.path.join(tempfile.gettempdir(), "latex_editor_projects.db")
+DB_PATH = os.environ.get("DB_PATH", _default_db)
 
 # Rate limiter
 limiter = Limiter(
@@ -76,7 +86,9 @@ def close_db(exception):
 
 def init_db():
     """Initialize database schema."""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -187,10 +199,16 @@ def compile_latex():
     """
     data = request.get_json(silent=True)
     
-    if not data or "latex" not in data:
+    if not data or not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+
+    if "latex" not in data:
         return jsonify({"error": "Missing 'latex' field in request body"}), 400
     
     latex_content = data.get("latex", "")
+
+    if not isinstance(latex_content, str):
+        return jsonify({"error": "'latex' field must be a string"}), 400
 
     if len(latex_content) > MAX_CONTENT_LENGTH:
         return jsonify({"error": "LaTeX content exceeds maximum allowed size"}), 413
@@ -220,6 +238,9 @@ def documents_endpoint():
     
     if data is None:
         return jsonify({"error": "Request body must be valid JSON"}), 400
+    
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
     
     if not data:
         return jsonify({"error": "Request body cannot be empty"}), 400
@@ -269,6 +290,9 @@ def document_operations(doc_id):
         data = request.get_json(silent=True)
         if data is None:
             return jsonify({"error": "Request body must be JSON"}), 400
+        
+        if not isinstance(data, dict):
+            return jsonify({"error": "Request body must be a JSON object"}), 400
         
         if "title" not in data and "content" not in data:
             return jsonify({"error": "At least one of 'title' or 'content' must be provided"}), 400
@@ -377,10 +401,12 @@ def create_project():
         db.commit()
     except sqlite3.IntegrityError as e:
         db.rollback()
-        return jsonify({"error": f"Database constraint violation: {str(e)}"}), 409
+        app.logger.error("Database constraint violation: %s", e)
+        return jsonify({"error": "Database constraint violation"}), 409
     except Exception as e:
         db.rollback()
-        return jsonify({"error": f"Failed to create project: {str(e)}"}), 500
+        app.logger.error("Failed to create project: %s", e)
+        return jsonify({"error": "Failed to create project"}), 500
 
     row = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     return jsonify(_project_to_dict(row, include_files=True, db=db)), 201
@@ -452,10 +478,12 @@ def update_project(project_id):
         db.commit()
     except sqlite3.IntegrityError as e:
         db.rollback()
-        return jsonify({"error": f"Database constraint violation: {str(e)}"}), 409
+        app.logger.error("Database constraint violation: %s", e)
+        return jsonify({"error": "Database constraint violation"}), 409
     except Exception as e:
         db.rollback()
-        return jsonify({"error": f"Failed to update project: {str(e)}"}), 500
+        app.logger.error("Failed to update project: %s", e)
+        return jsonify({"error": "Failed to update project"}), 500
 
     row = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     return jsonify(_project_to_dict(row, include_files=True, db=db))
