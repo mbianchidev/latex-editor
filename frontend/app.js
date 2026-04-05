@@ -231,6 +231,7 @@ async function init() {
   
   initializeEventListeners();
   initializeResizer();
+  initAutocomplete();
   
   // Try to restore last session — localStorage first, then backend
   let restored = false;
@@ -275,6 +276,239 @@ function initializeEditor() {
       compile();
     }
   });
+}
+
+// ============================================
+// LATEX AUTOCOMPLETE
+// ============================================
+
+const AUTOCOMPLETE_COMMANDS = [
+  { cmd: 'begin', hint: '{environment}' },
+  { cmd: 'end', hint: '{environment}' },
+  { cmd: 'section', hint: '{title}' },
+  { cmd: 'subsection', hint: '{title}' },
+  { cmd: 'subsubsection', hint: '{title}' },
+  { cmd: 'paragraph', hint: '{title}' },
+  { cmd: 'textbf', hint: '{bold text}' },
+  { cmd: 'textit', hint: '{italic text}' },
+  { cmd: 'texttt', hint: '{monospace}' },
+  { cmd: 'textsc', hint: '{small caps}' },
+  { cmd: 'emph', hint: '{emphasis}' },
+  { cmd: 'underline', hint: '{text}' },
+  { cmd: 'href', hint: '{url}{text}' },
+  { cmd: 'url', hint: '{url}' },
+  { cmd: 'includegraphics', hint: '[opts]{file}' },
+  { cmd: 'input', hint: '{file}' },
+  { cmd: 'include', hint: '{file}' },
+  { cmd: 'usepackage', hint: '{package}' },
+  { cmd: 'documentclass', hint: '{class}' },
+  { cmd: 'title', hint: '{text}' },
+  { cmd: 'author', hint: '{name}' },
+  { cmd: 'date', hint: '{date}' },
+  { cmd: 'maketitle', hint: '' },
+  { cmd: 'tableofcontents', hint: '' },
+  { cmd: 'newcommand', hint: '{\\cmd}[n]{def}' },
+  { cmd: 'renewcommand', hint: '{\\cmd}{def}' },
+  { cmd: 'newpage', hint: '' },
+  { cmd: 'clearpage', hint: '' },
+  { cmd: 'pagebreak', hint: '' },
+  { cmd: 'noindent', hint: '' },
+  { cmd: 'centering', hint: '' },
+  { cmd: 'vspace', hint: '{length}' },
+  { cmd: 'hspace', hint: '{length}' },
+  { cmd: 'label', hint: '{key}' },
+  { cmd: 'ref', hint: '{key}' },
+  { cmd: 'cite', hint: '{key}' },
+  { cmd: 'footnote', hint: '{text}' },
+  { cmd: 'caption', hint: '{text}' },
+  { cmd: 'item', hint: '' },
+  { cmd: 'frac', hint: '{num}{den}' },
+  { cmd: 'sqrt', hint: '{expr}' },
+  { cmd: 'sum', hint: '' },
+  { cmd: 'int', hint: '' },
+  { cmd: 'infty', hint: '' },
+  { cmd: 'alpha', hint: '' },
+  { cmd: 'beta', hint: '' },
+  { cmd: 'gamma', hint: '' },
+  { cmd: 'delta', hint: '' },
+  { cmd: 'lambda', hint: '' },
+  { cmd: 'pi', hint: '' },
+  { cmd: 'sigma', hint: '' },
+  { cmd: 'theta', hint: '' },
+  { cmd: 'omega', hint: '' },
+  { cmd: 'color', hint: '{color}' },
+  { cmd: 'textcolor', hint: '{color}{text}' },
+  { cmd: 'definecolor', hint: '{name}{model}{def}' },
+  { cmd: 'geometry', hint: '{options}' },
+  { cmd: 'hrule', hint: '' },
+  { cmd: 'hline', hint: '' },
+  { cmd: 'cvsection', hint: '{title}' },
+  { cmd: 'cventry', hint: '{org}{role}{loc}{dates}{body}' },
+  { cmd: 'cvskill', hint: '{category}{skills}' },
+  { cmd: 'cvparagraph', hint: '' },
+  { cmd: 'makecvheader', hint: '' },
+  { cmd: 'name', hint: '{first}{last}' },
+  { cmd: 'position', hint: '{title}' },
+  { cmd: 'email', hint: '{address}' },
+  { cmd: 'github', hint: '{username}' },
+  { cmd: 'linkedin', hint: '{username}' },
+  { cmd: 'textbar', hint: '' },
+  { cmd: 'textperiodcentered', hint: '' },
+  { cmd: 'texteuro', hint: '' },
+  { cmd: 'LaTeX', hint: '' },
+  { cmd: 'today', hint: '' },
+];
+
+const autocompleteState = {
+  visible: false,
+  items: [],
+  selectedIndex: 0,
+  prefix: '',
+  startPos: 0,
+};
+
+function initAutocomplete() {
+  const dropdown = document.getElementById('autocompleteDropdown');
+  if (!dropdown) return;
+
+  elements.editor.addEventListener('input', handleAutocompleteInput);
+  elements.editor.addEventListener('keydown', handleAutocompleteKeydown);
+  elements.editor.addEventListener('blur', () => setTimeout(hideAutocomplete, 150));
+  elements.editor.addEventListener('click', hideAutocomplete);
+}
+
+function handleAutocompleteInput() {
+  const textarea = elements.editor;
+  const pos = textarea.selectionStart;
+  const text = textarea.value.substring(0, pos);
+
+  // Find \command prefix at cursor
+  const match = text.match(/\\([a-zA-Z]*)$/);
+  if (!match || match[0].length < 2) {
+    hideAutocomplete();
+    return;
+  }
+
+  const prefix = match[1].toLowerCase();
+  const startPos = pos - match[1].length;
+  const filtered = AUTOCOMPLETE_COMMANDS.filter(c =>
+    c.cmd.toLowerCase().startsWith(prefix)
+  ).slice(0, 10);
+
+  if (filtered.length === 0) {
+    hideAutocomplete();
+    return;
+  }
+
+  autocompleteState.items = filtered;
+  autocompleteState.prefix = match[1];
+  autocompleteState.startPos = startPos;
+  autocompleteState.selectedIndex = 0;
+  autocompleteState.visible = true;
+
+  renderAutocomplete();
+  positionAutocomplete();
+}
+
+function handleAutocompleteKeydown(e) {
+  if (!autocompleteState.visible) return;
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    autocompleteState.selectedIndex = Math.min(
+      autocompleteState.selectedIndex + 1,
+      autocompleteState.items.length - 1
+    );
+    renderAutocomplete();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    autocompleteState.selectedIndex = Math.max(autocompleteState.selectedIndex - 1, 0);
+    renderAutocomplete();
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
+    if (autocompleteState.items.length > 0) {
+      e.preventDefault();
+      applyAutocomplete(autocompleteState.items[autocompleteState.selectedIndex]);
+    }
+  } else if (e.key === 'Escape') {
+    hideAutocomplete();
+  }
+}
+
+function applyAutocomplete(item) {
+  const textarea = elements.editor;
+  const before = textarea.value.substring(0, autocompleteState.startPos);
+  const after = textarea.value.substring(textarea.selectionStart);
+
+  let insertion = item.cmd;
+  let cursorOffset = insertion.length;
+
+  // Add braces for commands that take arguments
+  if (item.hint.startsWith('{')) {
+    insertion += '{}';
+    cursorOffset = insertion.length - 1;
+  }
+
+  textarea.value = before + insertion + after;
+  textarea.selectionStart = textarea.selectionEnd = autocompleteState.startPos + cursorOffset;
+
+  state.currentLatex = textarea.value;
+  hideAutocomplete();
+  textarea.focus();
+}
+
+function renderAutocomplete() {
+  const dropdown = document.getElementById('autocompleteDropdown');
+  if (!dropdown) return;
+
+  dropdown.innerHTML = autocompleteState.items.map((item, i) => {
+    const sel = i === autocompleteState.selectedIndex ? ' selected' : '';
+    return `<div class="autocomplete-item${sel}" data-index="${i}">
+      <span class="ac-cmd">\\${escapeHtml(item.cmd)}</span>
+      ${item.hint ? `<span class="ac-hint">${escapeHtml(item.hint)}</span>` : ''}
+    </div>`;
+  }).join('');
+
+  dropdown.classList.add('visible');
+
+  dropdown.querySelectorAll('.autocomplete-item').forEach(el => {
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const idx = parseInt(el.dataset.index);
+      applyAutocomplete(autocompleteState.items[idx]);
+    });
+  });
+
+  // Scroll selected into view
+  const selected = dropdown.querySelector('.selected');
+  if (selected) selected.scrollIntoView({ block: 'nearest' });
+}
+
+function positionAutocomplete() {
+  const dropdown = document.getElementById('autocompleteDropdown');
+  const textarea = elements.editor;
+  if (!dropdown || !textarea) return;
+
+  // Approximate cursor position using a mirror div
+  const text = textarea.value.substring(0, textarea.selectionStart);
+  const lines = text.split('\n');
+  const lineNum = lines.length;
+  const colNum = lines[lines.length - 1].length;
+
+  const style = window.getComputedStyle(textarea);
+  const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.4;
+  const charWidth = parseFloat(style.fontSize) * 0.6;
+
+  const top = lineNum * lineHeight - textarea.scrollTop + 4;
+  const left = colNum * charWidth + parseFloat(style.paddingLeft || 0);
+
+  dropdown.style.top = Math.min(top, textarea.offsetHeight - 210) + 'px';
+  dropdown.style.left = Math.min(left, textarea.offsetWidth - 220) + 'px';
+}
+
+function hideAutocomplete() {
+  autocompleteState.visible = false;
+  const dropdown = document.getElementById('autocompleteDropdown');
+  if (dropdown) dropdown.classList.remove('visible');
 }
 
 // ============================================
@@ -926,19 +1160,8 @@ function convertLatexToHTML(latex) {
   content = content.replace(/\\end\{center\}/g, '</div>');
 
   // 4.11. \begin{tabular*}{...}{...} ... \end{tabular*} → flex row
-  // This handles the common headerrow pattern: two columns, left-aligned and right-aligned
-  content = content.replace(/\\begin\{tabular\*?\}(?:\{[^}]*\})*\{[^}]*\}([\s\S]*?)\\end\{tabular\*?\}/g, (_, body) => {
-    // Split on & to get columns, split on \\ for rows
-    const rows = body.split(/\\\\/).filter(r => r.trim());
-    const html = rows.map(row => {
-      const cols = row.split('&').map(c => c.trim());
-      if (cols.length >= 2) {
-        return `<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.5em;"><div>${cols[0]}</div><div style="text-align: right; flex-shrink: 0;">${cols[1]}</div></div>`;
-      }
-      return `<div>${cols[0] || ''}</div>`;
-    }).join('');
-    return html;
-  });
+  // Uses balanced brace parsing to handle nested braces in column specs
+  content = parseTabularEnvs(content);
 
   // 4.12. \begin{list}...\end{list}, \begin{indentsection}...\end{indentsection}
   content = content.replace(/\\begin\{list\}(?:\{[^}]*\})*(?:\{[\s\S]*?\})?/g, '<div style="padding-left: 1em;">');
@@ -959,7 +1182,13 @@ function convertLatexToHTML(latex) {
 
   // 4.14. \item[] → item without marker
   content = content.replace(/\\item\[\]/g, '<li style="list-style: none; margin-left: -1.5em;">');
-  // Keep \item\s* for later processing
+
+  // 4.15. Section headings (process BEFORE font-size stripping so \Large inside args works)
+  content = content
+    .replace(/\\section\*?\{([^}]*)\}/g, (_, s) => `<h2>${s.replace(/\\Large\s*/g, '').replace(/\\LARGE\s*/g, '').replace(/\\large\s*/g, '')}</h2>`)
+    .replace(/\\subsection\*?\{([^}]*)\}/g, (_, s) => `<h3>${s.replace(/\\Large\s*/g, '').replace(/\\LARGE\s*/g, '').replace(/\\large\s*/g, '')}</h3>`)
+    .replace(/\\subsubsection\*?\{([^}]*)\}/g, (_, s) => `<h4>${s.replace(/\\Large\s*/g, '').replace(/\\LARGE\s*/g, '').replace(/\\large\s*/g, '')}</h4>`)
+    .replace(/\\paragraph\*?\{([^}]*)\}/g, (_, s) => `<h5>${s}</h5>`);
 
   // 5. Handle \href{url}{text} → link
   content = content.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, url, text) => {
@@ -1012,12 +1241,8 @@ function convertLatexToHTML(latex) {
     .replace(/\\begin\{cvitems\}/g, '<ul class="cv-items">')
     .replace(/\\end\{cvitems\}/g, '</ul>');
 
-  // 11. Standard LaTeX conversions
+  // 11. Standard LaTeX conversions (sections already handled in 4.15)
   content = content
-    .replace(/\\section\*?\{([^}]*)\}/g, (_, s) => `<h2>${s}</h2>`)
-    .replace(/\\subsection\*?\{([^}]*)\}/g, (_, s) => `<h3>${s}</h3>`)
-    .replace(/\\subsubsection\*?\{([^}]*)\}/g, (_, s) => `<h4>${s}</h4>`)
-    .replace(/\\paragraph\*?\{([^}]*)\}/g, (_, s) => `<h5>${s}</h5>`)
     .replace(/\\textbf\{([^}]*)\}/g, (_, s) => `<strong>${s}</strong>`)
     .replace(/\\textit\{([^}]*)\}/g, (_, s) => `<em>${s}</em>`)
     .replace(/\\texttt\{([^}]*)\}/g, (_, s) => `<code>${s}</code>`)
@@ -1457,6 +1682,57 @@ function processBalancedCmd(str, cmdName, replacer) {
     str = str.substring(0, cmdStart) + replacement + str.substring(group.end);
   }
   return str;
+}
+
+/**
+ * Parse \begin{tabular*} and \begin{tabular} environments using balanced
+ * brace extraction so nested braces in column specs are handled correctly.
+ */
+function parseTabularEnvs(content) {
+  const regex = /\\begin\{tabular\*?\}/g;
+  let match;
+
+  while ((match = regex.exec(content)) !== null) {
+    const startPos = match.index;
+    let pos = match.index + match[0].length;
+
+    // Skip all brace-group arguments (width spec, column spec, etc.)
+    while (pos < content.length) {
+      const ws = content.substring(pos).match(/^\s*/);
+      if (ws) pos += ws[0].length;
+      if (content[pos] === '{') {
+        const group = extractBraceGroup(content, pos);
+        if (!group) break;
+        pos = group.end;
+      } else {
+        break;
+      }
+    }
+
+    // Find matching \end{tabular*} or \end{tabular}
+    const endPattern = /\\end\{tabular\*?\}/g;
+    endPattern.lastIndex = pos;
+    const endMatch = endPattern.exec(content);
+    if (!endMatch) continue;
+
+    const body = content.substring(pos, endMatch.index);
+    const endPos = endMatch.index + endMatch[0].length;
+
+    // Convert tabular body: split on & for columns, \\ for rows
+    const rows = body.split(/\\\\/).filter(r => r.trim());
+    const html = rows.map(row => {
+      const cols = row.split('&').map(c => c.trim());
+      if (cols.length >= 2) {
+        return `<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.5em;"><div>${cols[0]}</div><div style="text-align: right; flex-shrink: 0;">${cols[1]}</div></div>`;
+      }
+      return `<div>${cols[0] || ''}</div>`;
+    }).join('');
+
+    content = content.substring(0, startPos) + html + content.substring(endPos);
+    regex.lastIndex = startPos + html.length;
+  }
+
+  return content;
 }
 
 /**
