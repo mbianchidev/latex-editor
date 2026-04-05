@@ -3154,11 +3154,9 @@ async function pushToGithub() {
     return;
   }
 
-  // Save repo for future use
   state.githubRepo = repo;
   localStorage.setItem('latexEditor_githubRepo', repo);
 
-  // Sync current editor content
   if (state.currentFile && !isBinaryContent(state.projectFiles[state.currentFile])) {
     state.projectFiles[state.currentFile] = state.currentLatex;
   }
@@ -3171,7 +3169,6 @@ async function pushToGithub() {
   try {
     showStatus('Pushing to GitHub...', 'info');
 
-    // Check if repo exists, if not create it
     let repoRes = await fetch(`https://api.github.com/repos/${repo}`, { headers });
     if (repoRes.status === 404) {
       const [owner, repoName] = repo.split('/');
@@ -3188,22 +3185,31 @@ async function pushToGithub() {
         body: JSON.stringify({ name: repoName, private: true, auto_init: true }),
       });
       if (!repoRes.ok) throw new Error('Failed to create repository');
-      // Wait for repo to be ready
       await new Promise(r => setTimeout(r, 2000));
     }
 
-    // Get default branch ref
-    const refRes = await fetch(`https://api.github.com/repos/${repo}/git/ref/heads/main`, { headers });
-    let baseSha = null;
-    let baseTreeSha = null;
+    // Resolve default branch name (main, master, etc.)
+    const repoData = await (await fetch(`https://api.github.com/repos/${repo}`, { headers })).json();
+    const defaultBranch = repoData.default_branch || 'main';
 
-    if (refRes.ok) {
-      const refData = await refRes.json();
-      baseSha = refData.object.sha;
-      const commitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits/${baseSha}`, { headers });
-      const commitData = await commitRes.json();
-      baseTreeSha = commitData.tree.sha;
-    }
+    const refRes = await fetch(`https://api.github.com/repos/${repo}/git/ref/heads/${defaultBranch}`, { headers });
+    if (!refRes.ok) throw new Error(`Default branch '${defaultBranch}' not found`);
+
+    const refData = await refRes.json();
+    const baseSha = refData.object.sha;
+    const baseCommitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits/${baseSha}`, { headers });
+    const baseCommitData = await baseCommitRes.json();
+    const baseTreeSha = baseCommitData.tree.sha;
+
+    // Create a unique branch
+    const timestamp = Date.now();
+    const branchName = `latex-editor/update-${timestamp}`;
+    const createBranchRes = await fetch(`https://api.github.com/repos/${repo}/git/refs`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
+    });
+    if (!createBranchRes.ok) throw new Error('Failed to create branch');
 
     // Create blobs for each file
     const tree = [];
@@ -3225,60 +3231,58 @@ async function pushToGithub() {
       if (!blobRes.ok) throw new Error(`Failed to create blob for ${path}`);
       const blob = await blobRes.json();
 
-      tree.push({
-        path,
-        mode: '100644',
-        type: 'blob',
-        sha: blob.sha,
-      });
+      tree.push({ path, mode: '100644', type: 'blob', sha: blob.sha });
     }
-
-    // Create tree
-    const treePayload = { tree };
-    if (baseTreeSha) treePayload.base_tree = baseTreeSha;
 
     const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(treePayload),
+      body: JSON.stringify({ tree, base_tree: baseTreeSha }),
     });
     if (!treeRes.ok) throw new Error('Failed to create tree');
     const treeData = await treeRes.json();
 
-    // Create commit
-    const commitPayload = {
-      message: `Update from LaTeX Editor (${new Date().toISOString()})`,
-      tree: treeData.sha,
-    };
-    if (baseSha) commitPayload.parents = [baseSha];
-
+    const commitMessage = `Update from LaTeX Editor (${new Date().toISOString()})`;
     const commitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(commitPayload),
+      body: JSON.stringify({
+        message: commitMessage,
+        tree: treeData.sha,
+        parents: [baseSha],
+      }),
     });
     if (!commitRes.ok) throw new Error('Failed to create commit');
     const newCommit = await commitRes.json();
 
-    // Update ref
-    const updateRef = baseSha
-      ? fetch(`https://api.github.com/repos/${repo}/git/refs/heads/main`, {
-          method: 'PATCH',
-          headers,
-          body: JSON.stringify({ sha: newCommit.sha }),
-        })
-      : fetch(`https://api.github.com/repos/${repo}/git/refs`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ ref: 'refs/heads/main', sha: newCommit.sha }),
-        });
+    // Point the new branch at the commit
+    const updateBranchRes = await fetch(`https://api.github.com/repos/${repo}/git/refs/heads/${branchName}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ sha: newCommit.sha }),
+    });
+    if (!updateBranchRes.ok) throw new Error('Failed to update branch ref');
 
-    const updateRes = await updateRef;
-    if (!updateRes.ok) throw new Error('Failed to update branch ref');
+    // Open a pull request against the default branch
+    const prRes = await fetch(`https://api.github.com/repos/${repo}/pulls`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        title: commitMessage,
+        head: branchName,
+        base: defaultBranch,
+        body: 'Automated pull request created by [LaTeX Editor](https://github.com/mbianchidev/latex-editor).',
+      }),
+    });
+    if (!prRes.ok) {
+      const prErr = await prRes.json();
+      throw new Error(prErr.message || 'Failed to create pull request');
+    }
+    const prData = await prRes.json();
 
     showGithubConnected(repo);
-    showSuccessToast(`Pushed to github.com/${repo}`);
-    showStatus('Push complete', 'success');
+    showSuccessToast(`PR #${prData.number} opened on github.com/${repo}`);
+    showStatus('Push complete — PR created', 'success');
   } catch (err) {
     console.error('GitHub push failed:', err);
     showErrorToast(`Push failed: ${err.message}`);
@@ -3305,8 +3309,11 @@ async function pullFromGithub() {
   try {
     showStatus('Pulling from GitHub...', 'info');
 
-    // Get the tree recursively
-    const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees/main?recursive=1`, { headers });
+    // Resolve default branch name
+    const repoData = await (await fetch(`https://api.github.com/repos/${repo}`, { headers })).json();
+    const defaultBranch = repoData.default_branch || 'main';
+
+    const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees/${defaultBranch}?recursive=1`, { headers });
     if (!treeRes.ok) throw new Error(`Failed to fetch tree: HTTP ${treeRes.status}`);
     const treeData = await treeRes.json();
 
