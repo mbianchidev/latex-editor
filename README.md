@@ -84,9 +84,10 @@ python3 -m http.server 8080
 ### Project Management
 
 - Click **Projects** in the header to open the projects drawer
-- All projects are persisted in a SQLite database (Docker volume `backend-data`)
+- All projects are persisted in a SQLite database on your host machine at `~/.latex-editor/data/` (customisable — see [Data Storage](#-data-storage))
 - Project names must be unique — duplicates are rejected
 - Open, rename, or delete projects from the drawer
+- The storage path and database size are shown at the bottom of the projects drawer
 
 ### GitHub Integration
 
@@ -153,8 +154,23 @@ Your content here.
 - **Frontend**: HTML5, CSS3, Vanilla JavaScript (ES6+)
 - **Libraries**: MathJax 3, jsPDF, html2canvas, JSZip
 - **Backend**: Python/Flask with SQLite, rate limiting (flask-limiter)
-- **Database**: SQLite (persisted via Docker volume)
+- **Database**: SQLite (bind-mounted to host filesystem)
 - **Container**: Docker with nginx (reverse proxy + CSP headers)
+
+## 💾 Data Storage
+
+Projects are stored in a SQLite database that lives on your **host machine**, not inside the Docker container. This means your data survives `docker compose down`, image rebuilds, and container restarts.
+
+**Default path:** `~/.latex-editor/data/projects.db`
+
+To use a custom path, create a `.env` file in the project root (see `.env.example`):
+
+```bash
+# .env
+LATEX_EDITOR_DATA=/path/to/your/data
+```
+
+The storage path is visible in the projects drawer footer.
 
 ## 📁 Project Structure
 

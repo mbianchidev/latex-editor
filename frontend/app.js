@@ -183,6 +183,7 @@ const elements = {
   projectsList: document.getElementById('projectsList'),
   drawerGithubBtn: document.getElementById('drawerGithubBtn'),
   drawerNewProjectBtn: document.getElementById('drawerNewProjectBtn'),
+  drawerStorageInfo: document.getElementById('drawerStorageInfo'),
   // New project modal
   newProjectModalOverlay: document.getElementById('newProjectModalOverlay'),
   closeNewProjectModal: document.getElementById('closeNewProjectModal'),
@@ -3903,11 +3904,26 @@ function openProjectsDrawer() {
   elements.projectsDrawer.classList.add('open');
   elements.drawerOverlay.classList.add('open');
   loadProjectsList();
+  loadStorageInfo();
 }
 
 function closeProjectsDrawer() {
   elements.projectsDrawer.classList.remove('open');
   elements.drawerOverlay.classList.remove('open');
+}
+
+async function loadStorageInfo() {
+  try {
+    const res = await fetch(`${API_BASE}/settings`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const sizeKB = (data.db_size_bytes / 1024).toFixed(1);
+    elements.drawerStorageInfo.innerHTML =
+      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>` +
+      ` Storage: <strong>${data.storage_path}</strong> (${sizeKB} KB)`;
+  } catch {
+    elements.drawerStorageInfo.textContent = '';
+  }
 }
 
 async function loadProjectsList() {

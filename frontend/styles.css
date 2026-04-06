@@ -1259,6 +1259,23 @@ button {
   border-top: 1px solid var(--border-primary, #D4CEC0);
   background: var(--bg-secondary, #F5F2EB);
 }
+.drawer-storage-info {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.72rem;
+  color: var(--text-tertiary, #A39D8F);
+  background: var(--bg-primary, #FAF8F4);
+  border: 1px solid var(--border-primary, #D4CEC0);
+  border-radius: 6px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.drawer-storage-info svg {
+  width: 12px;
+  height: 12px;
+  vertical-align: -1px;
+  margin-right: 2px;
+}
 
 .drawer-empty {
   text-align: center;

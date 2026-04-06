@@ -189,6 +189,7 @@ def api_status():
         "endpoints": [
             {"path": "/health", "method": "GET", "description": "Health check"},
             {"path": "/api/v1/status", "method": "GET", "description": "API status"},
+            {"path": "/api/v1/settings", "method": "GET", "description": "Server settings"},
             {"path": "/api/v1/compile", "method": "POST", "description": "Compile LaTeX (future)"},
             {"path": "/api/v1/documents", "method": "GET", "description": "List all documents"},
             {"path": "/api/v1/documents", "method": "POST", "description": "Create a document"},
@@ -202,6 +203,23 @@ def api_status():
             {"path": "/api/v1/projects/:id", "method": "DELETE", "description": "Delete a project"},
             {"path": "/api/v1/projects/:id/name", "method": "PUT", "description": "Rename a project"}
         ]
+    })
+
+
+@app.route("/api/v1/settings", methods=["GET"])
+def get_settings():
+    """Return server settings so the frontend can display storage info."""
+    db_size = 0
+    try:
+        db_size = os.path.getsize(DB_PATH)
+    except OSError:
+        pass
+    return jsonify({
+        "storage_path": DB_PATH,
+        "db_size_bytes": db_size,
+        "max_projects": MAX_PROJECTS,
+        "max_documents": MAX_DOCUMENTS,
+        "max_content_length": MAX_CONTENT_LENGTH,
     })
 
 
