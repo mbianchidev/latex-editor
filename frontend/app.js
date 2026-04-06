@@ -2464,7 +2464,8 @@ function saveProjectToLocalStorage() {
 }
 
 /**
- * Load from localStorage. Returns true if a project or content was restored.
+ * Load from localStorage. Returns true if a project was restored.
+ * Simple document content is only used as a fallback — projects take priority.
  */
 function loadFromLocalStorage() {
   try {
@@ -2480,8 +2481,14 @@ function loadFromLocalStorage() {
       const success = loadProjectFromLocalStorage();
       if (success) return true;
     }
+
+    // If there's a lastProjectId, DON'T fall back to simple content —
+    // let the backend load handle it (the simple content lacks project files)
+    if (localStorage.getItem('latexEditor_lastProjectId')) {
+      return false;
+    }
     
-    // Fall back to simple document
+    // Fall back to simple document only if there's no project to restore
     const savedContent = localStorage.getItem('latexEditor_content');
     if (savedContent && savedContent !== DEFAULT_TEMPLATE) {
       state.currentLatex = savedContent;
