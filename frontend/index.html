@@ -362,6 +362,32 @@
         </div>
     </div>
 
+    <!-- Generic Prompt / Confirm Modal -->
+    <div class="modal-overlay" id="genericModalOverlay" style="display:none;">
+        <div class="modal" id="genericModal">
+            <div class="modal-header">
+                <h3 id="genericModalTitle">Title</h3>
+                <button class="icon-btn" id="genericModalClose">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p id="genericModalMessage" style="margin:0 0 0.75rem;"></p>
+                <div class="form-group" id="genericModalInputGroup" style="margin:0;">
+                    <label for="genericModalInput" id="genericModalLabel">Value</label>
+                    <input type="text" id="genericModalInput" class="form-input" autocomplete="off">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="genericModalCancel">Cancel</button>
+                <button class="btn btn-primary" id="genericModalOk">OK</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.js" 
             integrity="sha512-8RnEqURPUc5aqFEN04aQEiPlSAdE0jlFS/9iGgUyNtwFnSKCXhmB6ZTNl7LnDtDWKabJIASzXrzD0K+LYexU9g==" 

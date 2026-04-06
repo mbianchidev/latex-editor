@@ -201,7 +201,113 @@ const elements = {
   githubDisconnect: document.getElementById('githubDisconnect'),
   githubPush: document.getElementById('githubPush'),
   githubPull: document.getElementById('githubPull'),
+  // Generic prompt/confirm modal
+  genericModalOverlay: document.getElementById('genericModalOverlay'),
+  genericModalTitle: document.getElementById('genericModalTitle'),
+  genericModalMessage: document.getElementById('genericModalMessage'),
+  genericModalInputGroup: document.getElementById('genericModalInputGroup'),
+  genericModalLabel: document.getElementById('genericModalLabel'),
+  genericModalInput: document.getElementById('genericModalInput'),
+  genericModalCancel: document.getElementById('genericModalCancel'),
+  genericModalOk: document.getElementById('genericModalOk'),
+  genericModalClose: document.getElementById('genericModalClose'),
 };
+
+// ============================================
+// GENERIC MODAL HELPERS (prompt / confirm)
+// ============================================
+
+let _genericModalResolve = null;
+let _genericModalMode = null; // 'prompt' | 'confirm'
+
+function _openGenericModal() {
+  elements.genericModalOverlay.style.display = 'flex';
+}
+
+function _closeGenericModal(value) {
+  elements.genericModalOverlay.style.display = 'none';
+  if (_genericModalResolve) {
+    const resolve = _genericModalResolve;
+    _genericModalResolve = null;
+    _genericModalMode = null;
+    resolve(value);
+  }
+}
+
+/**
+ * Show a styled prompt modal. Returns a Promise that resolves to
+ * the entered string, or null if the user cancelled.
+ */
+function showPromptModal(title, label, defaultValue = '', placeholder = '') {
+  return new Promise((resolve) => {
+    _genericModalResolve = resolve;
+    _genericModalMode = 'prompt';
+    elements.genericModalTitle.textContent = title;
+    elements.genericModalMessage.style.display = 'none';
+    elements.genericModalInputGroup.style.display = '';
+    elements.genericModalLabel.textContent = label;
+    elements.genericModalInput.value = defaultValue;
+    elements.genericModalInput.placeholder = placeholder;
+    elements.genericModalOk.textContent = 'OK';
+    elements.genericModalOk.className = 'btn btn-primary';
+    _openGenericModal();
+    elements.genericModalInput.focus();
+    elements.genericModalInput.select();
+  });
+}
+
+/**
+ * Show a styled confirm modal. Returns a Promise that resolves to
+ * true (confirmed) or false (cancelled).
+ * @param {Object} [opts] - Options: okLabel, danger (uses red button)
+ */
+function showConfirmModal(title, message, opts = {}) {
+  return new Promise((resolve) => {
+    _genericModalResolve = resolve;
+    _genericModalMode = 'confirm';
+    elements.genericModalTitle.textContent = title;
+    elements.genericModalMessage.textContent = message;
+    elements.genericModalMessage.style.display = '';
+    elements.genericModalInputGroup.style.display = 'none';
+    elements.genericModalOk.textContent = opts.okLabel || 'Confirm';
+    elements.genericModalOk.className = opts.danger
+      ? 'btn btn-danger'
+      : 'btn btn-primary';
+    _openGenericModal();
+    elements.genericModalOk.focus();
+  });
+}
+
+// Wire up generic modal buttons & dismiss paths
+elements.genericModalOk.addEventListener('click', () => {
+  if (_genericModalMode === 'prompt') {
+    _closeGenericModal(elements.genericModalInput.value);
+  } else {
+    _closeGenericModal(true);
+  }
+});
+elements.genericModalCancel.addEventListener('click', () => {
+  _closeGenericModal(_genericModalMode === 'prompt' ? null : false);
+});
+elements.genericModalClose.addEventListener('click', () => {
+  _closeGenericModal(_genericModalMode === 'prompt' ? null : false);
+});
+elements.genericModalOverlay.addEventListener('click', (e) => {
+  if (e.target === elements.genericModalOverlay) {
+    _closeGenericModal(_genericModalMode === 'prompt' ? null : false);
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (elements.genericModalOverlay.style.display !== 'flex') return;
+  if (e.key === 'Escape') {
+    e.stopPropagation();
+    _closeGenericModal(_genericModalMode === 'prompt' ? null : false);
+  }
+  if (e.key === 'Enter' && _genericModalMode === 'prompt') {
+    e.preventDefault();
+    _closeGenericModal(elements.genericModalInput.value);
+  }
+});
 
 // ============================================
 // INITIALIZATION
@@ -588,10 +694,9 @@ function initializeEventListeners() {
   
   // New file/folder buttons in file tree header
   if (elements.newFileBtn) {
-    elements.newFileBtn.addEventListener('click', () => {
-      // If not in project mode, create a new project first
+    elements.newFileBtn.addEventListener('click', async () => {
       if (!state.projectMode) {
-        if (confirm('Create a new project to add files? Unsaved changes to the current document will be lost.')) {
+        if (await showConfirmModal('New Project', 'Create a new project to add files? Unsaved changes to the current document will be lost.')) {
           newProject();
         }
         return;
@@ -600,10 +705,9 @@ function initializeEventListeners() {
     });
   }
   if (elements.newFolderBtn) {
-    elements.newFolderBtn.addEventListener('click', () => {
-      // If not in project mode, create a new project first
+    elements.newFolderBtn.addEventListener('click', async () => {
       if (!state.projectMode) {
-        if (confirm('Create a new project to add folders? Unsaved changes to the current document will be lost.')) {
+        if (await showConfirmModal('New Project', 'Create a new project to add folders? Unsaved changes to the current document will be lost.')) {
           newProject();
         }
         return;
@@ -2257,10 +2361,10 @@ This is your new LaTeX project. Edit this file or create new sections.
  * Open the new project modal.
  * Replaces the old separate newDocument() / newProject() flows.
  */
-function openNewProjectModal() {
+async function openNewProjectModal() {
   if (state.projectMode && Object.keys(state.projectFiles).length > 0 &&
       state.currentLatex !== DEFAULT_TEMPLATE &&
-      !confirm('Create new project? You will switch away from the current project.')) {
+      !(await showConfirmModal('New Project', 'Create new project? You will switch away from the current project.'))) {
     return;
   }
   elements.newProjectModalOverlay.style.display = 'flex';
@@ -3041,7 +3145,7 @@ async function handleZipUpload(event) {
     saveProjectToLocalStorage();
     
     // Use name from the new project modal if available, otherwise prompt
-    const projectName = state._pendingProjectName || prompt('Enter project name:', file.name.replace(/\.zip$/i, ''));
+    const projectName = state._pendingProjectName || (await showPromptModal('Project Name', 'Enter project name:', file.name.replace(/\.zip$/i, '')));
     state._pendingProjectName = null;
     if (projectName && projectName.trim()) {
       const payload = {
@@ -3529,8 +3633,8 @@ function hideContextMenu() {
 /**
  * Add a new file to the project
  */
-function addNewFile(parentPath) {
-  const filename = prompt('Enter new file name (e.g., chapter1.tex):');
+async function addNewFile(parentPath) {
+  const filename = await showPromptModal('New File', 'File name:', '', 'chapter1.tex');
   if (!filename) return;
 
   const safeName = sanitizeFilename(filename);
@@ -3569,8 +3673,8 @@ function addNewFile(parentPath) {
 /**
  * Add a new folder to the project
  */
-function addNewFolder(parentPath) {
-  const foldername = prompt('Enter new folder name:');
+async function addNewFolder(parentPath) {
+  const foldername = await showPromptModal('New Folder', 'Folder name:', '', 'sections');
   if (!foldername) return;
 
   const safeName = sanitizeFilename(foldername);
@@ -3600,9 +3704,9 @@ function addNewFolder(parentPath) {
 /**
  * Rename a file
  */
-function renameFile(oldPath) {
+async function renameFile(oldPath) {
   const oldName = oldPath.split('/').pop();
-  const newName = prompt('Enter new file name:', oldName);
+  const newName = await showPromptModal('Rename File', 'New file name:', oldName);
   if (!newName || newName === oldName) return;
 
   const safeName = sanitizeFilename(newName);
@@ -3647,9 +3751,9 @@ function renameFile(oldPath) {
 /**
  * Rename a folder (moves all files within)
  */
-function renameFolder(oldPath) {
+async function renameFolder(oldPath) {
   const oldName = oldPath.split('/').pop();
-  const newName = prompt('Enter new folder name:', oldName);
+  const newName = await showPromptModal('Rename Folder', 'New folder name:', oldName);
   if (!newName || newName === oldName) return;
 
   const safeName = sanitizeFilename(newName);
@@ -3693,9 +3797,9 @@ function renameFolder(oldPath) {
 /**
  * Delete a file
  */
-function deleteFile(path) {
+async function deleteFile(path) {
   const filename = path.split('/').pop();
-  if (!confirm(`Delete ${filename}? This cannot be undone.`)) return;
+  if (!(await showConfirmModal('Delete File', `Delete ${filename}? This cannot be undone.`, { okLabel: 'Delete', danger: true }))) return;
   
   if (path === state.mainFile) {
     showErrorToast('Cannot delete the main file');
@@ -3724,9 +3828,9 @@ function deleteFile(path) {
 /**
  * Delete a folder and all its contents
  */
-function deleteFolder(path) {
+async function deleteFolder(path) {
   const foldername = path.split('/').pop();
-  if (!confirm(`Delete folder "${foldername}" and all its contents? This cannot be undone.`)) return;
+  if (!(await showConfirmModal('Delete Folder', `Delete folder "${foldername}" and all its contents? This cannot be undone.`, { okLabel: 'Delete', danger: true }))) return;
   
   // Check if main file is in this folder
   if (state.mainFile && state.mainFile.startsWith(path + '/')) {
@@ -3945,7 +4049,7 @@ async function saveProjectToBackend() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } else {
-      const name = state.currentProjectName || prompt('Enter project name:', 'my-project');
+      const name = state.currentProjectName || (await showPromptModal('Save Project', 'Project name:', 'my-project'));
       if (!name) return;
       payload.name = name;
       const res = await fetch(`${API_BASE}/projects`, {
@@ -3972,7 +4076,7 @@ async function saveProjectToBackend() {
 }
 
 async function renameProjectPrompt(projectId) {
-  const newName = prompt('Enter new project name:');
+  const newName = await showPromptModal('Rename Project', 'New project name:');
   if (!newName || !newName.trim()) return;
 
   try {
@@ -3996,7 +4100,7 @@ async function renameProjectPrompt(projectId) {
 }
 
 async function deleteProjectFromBackend(projectId, projectName) {
-  if (!confirm(`Delete project "${projectName}"? This cannot be undone.`)) return;
+  if (!(await showConfirmModal('Delete Project', `Delete project "${projectName}"? This cannot be undone.`, { okLabel: 'Delete', danger: true }))) return;
 
   try {
     const res = await fetch(`${API_BASE}/projects/${projectId}`, { method: 'DELETE' });
@@ -4155,7 +4259,12 @@ async function pushToGithub() {
     }
 
     // Resolve default branch name (main, master, etc.)
-    const repoData = await (await fetch(`https://api.github.com/repos/${repo}`, { headers })).json();
+    const repoInfoRes = await fetch(`https://api.github.com/repos/${repo}`, { headers });
+    if (!repoInfoRes.ok) {
+      const err = await repoInfoRes.json().catch(() => ({}));
+      throw new Error(err.message || `Failed to fetch repository info (HTTP ${repoInfoRes.status})`);
+    }
+    const repoData = await repoInfoRes.json();
     const defaultBranch = repoData.default_branch || 'main';
 
     const refRes = await fetch(`https://api.github.com/repos/${repo}/git/ref/heads/${defaultBranch}`, { headers });
@@ -4164,18 +4273,39 @@ async function pushToGithub() {
     const refData = await refRes.json();
     const baseSha = refData.object.sha;
     const baseCommitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits/${baseSha}`, { headers });
+    if (!baseCommitRes.ok) {
+      const err = await baseCommitRes.json().catch(() => ({}));
+      throw new Error(err.message || `Failed to fetch base commit (HTTP ${baseCommitRes.status})`);
+    }
     const baseCommitData = await baseCommitRes.json();
     const baseTreeSha = baseCommitData.tree.sha;
 
     // Create a unique branch
     const timestamp = Date.now();
-    const branchName = `latex-editor/update-${timestamp}`;
+    let branchName = `latex-editor/update-${timestamp}`;
     const createBranchRes = await fetch(`https://api.github.com/repos/${repo}/git/refs`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
     });
-    if (!createBranchRes.ok) throw new Error('Failed to create branch');
+    if (!createBranchRes.ok) {
+      const branchErr = await createBranchRes.json().catch(() => ({}));
+      // Retry once with a randomised suffix if the ref already exists (422)
+      if (createBranchRes.status === 422) {
+        branchName = `${branchName}-${Math.random().toString(36).slice(2, 8)}`;
+        const retryRes = await fetch(`https://api.github.com/repos/${repo}/git/refs`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
+        });
+        if (!retryRes.ok) {
+          const retryErr = await retryRes.json().catch(() => ({}));
+          throw new Error(retryErr.message || `Failed to create branch (HTTP ${retryRes.status})`);
+        }
+      } else {
+        throw new Error(branchErr.message || `Failed to create branch (HTTP ${createBranchRes.status})`);
+      }
+    }
 
     // Create blobs for each file
     const tree = [];
@@ -4276,7 +4406,12 @@ async function pullFromGithub() {
     showStatus('Pulling from GitHub...', 'info');
 
     // Resolve default branch name
-    const repoData = await (await fetch(`https://api.github.com/repos/${repo}`, { headers })).json();
+    const repoInfoRes = await fetch(`https://api.github.com/repos/${repo}`, { headers });
+    if (!repoInfoRes.ok) {
+      const err = await repoInfoRes.json().catch(() => ({}));
+      throw new Error(err.message || `Failed to fetch repository info (HTTP ${repoInfoRes.status})`);
+    }
+    const repoData = await repoInfoRes.json();
     const defaultBranch = repoData.default_branch || 'main';
 
     const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees/${defaultBranch}?recursive=1`, { headers });
@@ -4315,8 +4450,10 @@ async function pullFromGithub() {
 
     if (!mainFile) mainFile = Object.keys(files).find(f => f.endsWith('.tex')) || Object.keys(files)[0];
 
-    // Prompt for project name
-    const projectName = prompt('Project name:', repo.split('/').pop());
+    // Close the GitHub modal before prompting for project name
+    elements.githubModalOverlay.style.display = 'none';
+
+    const projectName = await showPromptModal('Project Name', 'Project name:', repo.split('/').pop());
     if (!projectName) return;
 
     // Save to backend
