@@ -652,6 +652,29 @@ function handleEditorChange(e) {
   
   saveToLocalStorage();
   scheduleBackendSave();
+  scheduleLiveValidation();
+}
+
+let _liveValidationTimer = null;
+
+function scheduleLiveValidation() {
+  if (_liveValidationTimer) clearTimeout(_liveValidationTimer);
+  _liveValidationTimer = setTimeout(runLiveValidation, 400);
+}
+
+function runLiveValidation() {
+  let latexContent = state.currentLatex;
+  if (state.projectMode && state.mainFile) {
+    latexContent = state.projectFiles[state.mainFile];
+    latexContent = resolveIncludes(latexContent, state.mainFile);
+  }
+
+  const errors = validateLatexSyntax(latexContent);
+  if (errors.length > 0) {
+    showStatus(`${errors.length} error(s): ${errors[0].message}`, 'error');
+  } else {
+    showStatus('Ready', 'success');
+  }
 }
 
 function updateCursorPosition() {
