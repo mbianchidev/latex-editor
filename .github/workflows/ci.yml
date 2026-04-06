@@ -98,6 +98,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Create data directory
+        run: mkdir -p ~/.latex-editor/data
+
       - name: Start services
         run: docker compose up -d --build
 

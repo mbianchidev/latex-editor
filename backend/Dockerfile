@@ -13,7 +13,9 @@ COPY . .
 RUN useradd --create-home appuser && \
     mkdir -p /data && \
     chown -R appuser:appuser /app /data
-USER appuser
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Expose port
 EXPOSE 5000
@@ -22,5 +24,6 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" || exit 1
 
-# Run with gunicorn
+# Entrypoint ensures /data is writable, then drops to appuser
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "app:app"]

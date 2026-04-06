@@ -31,7 +31,7 @@ services:
       - PORT=5000
       - DB_PATH=/data/projects.db
     volumes:
-      - ${LATEX_EDITOR_DATA:-~/.latex-editor/data}:/data
+      - ${LATEX_EDITOR_DATA:-${HOME}/.latex-editor/data}:/data
     networks:
       - latex-network
     restart: unless-stopped
