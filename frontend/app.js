@@ -238,11 +238,15 @@ async function init() {
   if (savedZoom) setZoom(parseFloat(savedZoom));
 
   // Always load projects from the backend (authoritative source)
-  // localStorage is unreliable for multi-file projects
   let restored = false;
   const lastProjectId = localStorage.getItem('latexEditor_lastProjectId');
   if (lastProjectId) {
     restored = await loadLastProjectFromBackend();
+  }
+
+  // If backend failed but we have a project in localStorage, use it
+  if (!restored && lastProjectId) {
+    restored = loadProjectFromLocalStorage();
   }
 
   if (!restored) {
@@ -258,7 +262,7 @@ async function init() {
   }
   
   showStatus('Compiling...', 'info');
-  compile(true);
+  await compile(true);
 }
 
 // ============================================
@@ -2542,40 +2546,45 @@ function loadFromLocalStorage() {
 /**
  * Load the last opened project from the backend.
  * Tries the stored project ID first, then falls back to most recently updated.
+ * Retries once after a short delay if the first attempt fails (Docker startup race).
  */
 async function loadLastProjectFromBackend() {
-  try {
-    const lastProjectId = localStorage.getItem('latexEditor_lastProjectId');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const lastProjectId = localStorage.getItem('latexEditor_lastProjectId');
 
-    if (lastProjectId) {
-      try {
+      if (lastProjectId) {
         const res = await fetch(`${API_BASE}/projects/${lastProjectId}`);
         if (res.ok) {
           const project = await res.json();
           restoreProject(project);
           return true;
         }
-      } catch (e) { /* project may have been deleted */ }
+      }
+
+      // Fall back to most recently updated project
+      const listRes = await fetch(`${API_BASE}/projects`);
+      if (!listRes.ok) throw new Error(`HTTP ${listRes.status}`);
+      const data = await listRes.json();
+      const projects = data.projects || [];
+      if (projects.length === 0) return false;
+
+      const latest = projects[0];
+      const res = await fetch(`${API_BASE}/projects/${latest.id}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const project = await res.json();
+      restoreProject(project);
+      return true;
+    } catch (err) {
+      if (attempt === 0) {
+        console.warn('Backend not ready, retrying in 1s...', err.message);
+        await new Promise(r => setTimeout(r, 1000));
+      } else {
+        console.error('Failed to load project from backend:', err);
+      }
     }
-
-    // Fall back to most recently updated project
-    const listRes = await fetch(`${API_BASE}/projects`);
-    if (!listRes.ok) return false;
-    const data = await listRes.json();
-    const projects = data.projects || [];
-    if (projects.length === 0) return false;
-
-    // Projects are sorted by updated_at desc from the API
-    const latest = projects[0];
-    const res = await fetch(`${API_BASE}/projects/${latest.id}`);
-    if (!res.ok) return false;
-    const project = await res.json();
-    restoreProject(project);
-    return true;
-  } catch (err) {
-    console.error('Failed to load project from backend:', err);
-    return false;
   }
+  return false;
 }
 
 /**
