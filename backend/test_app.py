@@ -72,6 +72,34 @@ class TestStatusEndpoint:
         assert len(data["endpoints"]) > 0
 
 
+class TestSettingsEndpoint:
+    """Tests for /api/v1/settings endpoint"""
+
+    def test_settings_returns_200(self, client):
+        response = client.get("/api/v1/settings")
+        assert response.status_code == 200
+
+    def test_settings_contains_storage_path(self, client):
+        response = client.get("/api/v1/settings")
+        data = response.get_json()
+        assert "storage_path" in data
+        assert isinstance(data["storage_path"], str)
+
+    def test_settings_contains_db_size(self, client):
+        response = client.get("/api/v1/settings")
+        data = response.get_json()
+        assert "db_size_bytes" in data
+        assert isinstance(data["db_size_bytes"], int)
+        assert data["db_size_bytes"] >= 0
+
+    def test_settings_contains_limits(self, client):
+        response = client.get("/api/v1/settings")
+        data = response.get_json()
+        assert "max_projects" in data
+        assert "max_documents" in data
+        assert "max_content_length" in data
+
+
 class TestCompileEndpoint:
     """Tests for /api/v1/compile endpoint"""
     

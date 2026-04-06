@@ -31,7 +31,7 @@ services:
       - PORT=5000
       - DB_PATH=/data/projects.db
     volumes:
-      - backend-data:/data
+      - ${LATEX_EDITOR_DATA:-${HOME}/.latex-editor/data}:/data
     networks:
       - latex-network
     restart: unless-stopped
@@ -45,6 +45,3 @@ services:
 networks:
   latex-network:
     driver: bridge
-
-volumes:
-  backend-data:
