@@ -239,6 +239,10 @@ function _closeGenericModal(value) {
  * the entered string, or null if the user cancelled.
  */
 function showPromptModal(title, label, defaultValue = '', placeholder = '') {
+  if (_genericModalResolve) {
+    // Cancel any pending modal before opening a new one so the old Promise resolves cleanly.
+    _closeGenericModal(null);
+  }
   return new Promise((resolve) => {
     _genericModalResolve = resolve;
     _genericModalMode = 'prompt';
@@ -262,6 +266,10 @@ function showPromptModal(title, label, defaultValue = '', placeholder = '') {
  * @param {Object} [opts] - Options: okLabel, danger (uses red button)
  */
 function showConfirmModal(title, message, opts = {}) {
+  if (_genericModalResolve) {
+    // Cancel any pending modal before opening a new one so the old Promise resolves cleanly.
+    _closeGenericModal(false);
+  }
   return new Promise((resolve) => {
     _genericModalResolve = resolve;
     _genericModalMode = 'confirm';
@@ -701,7 +709,7 @@ function initializeEventListeners() {
         }
         return;
       }
-      addNewFile('');
+      await addNewFile('');
     });
   }
   if (elements.newFolderBtn) {
@@ -4454,7 +4462,10 @@ async function pullFromGithub() {
     elements.githubModalOverlay.style.display = 'none';
 
     const projectName = await showPromptModal('Project Name', 'Project name:', repo.split('/').pop());
-    if (!projectName) return;
+    if (!projectName) {
+      elements.githubModalOverlay.style.display = '';
+      return;
+    }
 
     // Save to backend
     const saveRes = await fetch(`${API_BASE}/projects`, {

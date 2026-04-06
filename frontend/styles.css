@@ -1376,12 +1376,12 @@ button {
   background: var(--bg-secondary, #F5F2EB);
 }
 .modal-footer .btn-danger {
-  background: #c0392b;
+  background: var(--color-error, #c0392b);
   color: #fff;
-  border-color: #a93226;
+  border-color: var(--color-error-hover, #a93226);
 }
 .modal-footer .btn-danger:hover {
-  background: #a93226;
+  background: var(--color-error-hover, #a93226);
 }
 
 .form-group {
