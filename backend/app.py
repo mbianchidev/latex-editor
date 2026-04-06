@@ -41,12 +41,27 @@ MAX_TITLE_LENGTH = 256
 MAX_PROJECTS = int(os.environ.get("MAX_PROJECTS", "50"))
 MAX_PROJECT_NAME_LENGTH = 128
 
-# DB_PATH: use /data in Docker, fall back to temp dir in CI/local
-_default_db = "/data/projects.db"
-if not os.path.isdir("/data") and not os.environ.get("DB_PATH"):
-    import tempfile
-    _default_db = os.path.join(tempfile.gettempdir(), "latex_editor_projects.db")
-DB_PATH = os.environ.get("DB_PATH", _default_db)
+# DB_PATH: use /data in Docker, environment variable, or OS-appropriate location
+def _resolve_db_path():
+    """Resolve the database path using OS-appropriate defaults."""
+    # Explicit env var takes priority
+    env_path = os.environ.get("DB_PATH")
+    if env_path:
+        return env_path
+    # Docker volume
+    if os.path.isdir("/data"):
+        return "/data/projects.db"
+    # OS-appropriate user data directory
+    import sys
+    if sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support/seclaw")
+    elif sys.platform == "win32":
+        base = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "seclaw")
+    else:
+        base = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "seclaw")
+    return os.path.join(base, "seclaw.db")
+
+DB_PATH = _resolve_db_path()
 
 # Rate limiter
 limiter = Limiter(

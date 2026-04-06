@@ -147,12 +147,8 @@ const elements = {
   previewContainer: document.getElementById('previewContainer'),
   compileBtn: document.getElementById('compileBtn'),
   newDocBtn: document.getElementById('newDoc'),
-  newDropdown: document.getElementById('newDropdown'),
-  newDocItem: document.getElementById('newDocItem'),
-  newProjectItem: document.getElementById('newProjectItem'),
   downloadPdfBtn: document.getElementById('downloadPdf'),
   downloadTexBtn: document.getElementById('downloadTex'),
-  uploadZipBtn: document.getElementById('uploadZip'),
   zipFileInput: document.getElementById('zipFileInput'),
   downloadZipBtn: document.getElementById('downloadZip'),
   zoomInBtn: document.getElementById('zoomIn'),
@@ -186,6 +182,14 @@ const elements = {
   closeDrawer: document.getElementById('closeDrawer'),
   projectsList: document.getElementById('projectsList'),
   drawerGithubBtn: document.getElementById('drawerGithubBtn'),
+  drawerNewProjectBtn: document.getElementById('drawerNewProjectBtn'),
+  // New project modal
+  newProjectModalOverlay: document.getElementById('newProjectModalOverlay'),
+  closeNewProjectModal: document.getElementById('closeNewProjectModal'),
+  newProjectName: document.getElementById('newProjectName'),
+  newProjectBlankBtn: document.getElementById('newProjectBlankBtn'),
+  newProjectMultiBtn: document.getElementById('newProjectMultiBtn'),
+  newProjectZipBtn: document.getElementById('newProjectZipBtn'),
   // GitHub modal
   githubModalOverlay: document.getElementById('githubModalOverlay'),
   closeGithubModal: document.getElementById('closeGithubModal'),
@@ -207,7 +211,6 @@ async function init() {
   showStatus('Initializing...', 'info');
   
   // Migrate: clear ALL oversized localStorage data (now using SQLite backend)
-  // This prevents 431 errors caused by browsers sending large cookies
   try {
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const key = localStorage.key(i);
@@ -221,26 +224,45 @@ async function init() {
     }
   } catch (e) { /* ignore */ }
   
-  // Initialize editor
   initializeEditor();
   
-  // Set default template
   state.currentLatex = DEFAULT_TEMPLATE;
   elements.editor.value = DEFAULT_TEMPLATE;
   
-  // Initialize event listeners
   initializeEventListeners();
-  
-  // Initialize resizable divider
   initializeResizer();
+  initAutocomplete();
   
-  // Load from localStorage if available
-  loadFromLocalStorage();
+  // Restore zoom from localStorage
+  const savedZoom = localStorage.getItem('latexEditor_zoom');
+  if (savedZoom) setZoom(parseFloat(savedZoom));
+
+  // Always load projects from the backend (authoritative source)
+  let restored = false;
+  const lastProjectId = localStorage.getItem('latexEditor_lastProjectId');
+  if (lastProjectId) {
+    restored = await loadLastProjectFromBackend();
+  }
+
+  // If backend failed but we have a project in localStorage, use it
+  if (!restored && lastProjectId) {
+    restored = loadProjectFromLocalStorage();
+  }
+
+  if (!restored) {
+    // Fall back to simple localStorage content (non-project documents)
+    try {
+      const savedContent = localStorage.getItem('latexEditor_content');
+      if (savedContent && savedContent !== DEFAULT_TEMPLATE) {
+        state.currentLatex = savedContent;
+        elements.editor.value = savedContent;
+        restored = true;
+      }
+    } catch (e) { /* ignore */ }
+  }
   
   showStatus('Compiling...', 'info');
-  
-  // Compile on first load
-  compile(true);
+  await compile(true);
 }
 
 // ============================================
@@ -275,6 +297,239 @@ function initializeEditor() {
 }
 
 // ============================================
+// LATEX AUTOCOMPLETE
+// ============================================
+
+const AUTOCOMPLETE_COMMANDS = [
+  { cmd: 'begin', hint: '{environment}' },
+  { cmd: 'end', hint: '{environment}' },
+  { cmd: 'section', hint: '{title}' },
+  { cmd: 'subsection', hint: '{title}' },
+  { cmd: 'subsubsection', hint: '{title}' },
+  { cmd: 'paragraph', hint: '{title}' },
+  { cmd: 'textbf', hint: '{bold text}' },
+  { cmd: 'textit', hint: '{italic text}' },
+  { cmd: 'texttt', hint: '{monospace}' },
+  { cmd: 'textsc', hint: '{small caps}' },
+  { cmd: 'emph', hint: '{emphasis}' },
+  { cmd: 'underline', hint: '{text}' },
+  { cmd: 'href', hint: '{url}{text}' },
+  { cmd: 'url', hint: '{url}' },
+  { cmd: 'includegraphics', hint: '[opts]{file}' },
+  { cmd: 'input', hint: '{file}' },
+  { cmd: 'include', hint: '{file}' },
+  { cmd: 'usepackage', hint: '{package}' },
+  { cmd: 'documentclass', hint: '{class}' },
+  { cmd: 'title', hint: '{text}' },
+  { cmd: 'author', hint: '{name}' },
+  { cmd: 'date', hint: '{date}' },
+  { cmd: 'maketitle', hint: '' },
+  { cmd: 'tableofcontents', hint: '' },
+  { cmd: 'newcommand', hint: '{\\cmd}[n]{def}' },
+  { cmd: 'renewcommand', hint: '{\\cmd}{def}' },
+  { cmd: 'newpage', hint: '' },
+  { cmd: 'clearpage', hint: '' },
+  { cmd: 'pagebreak', hint: '' },
+  { cmd: 'noindent', hint: '' },
+  { cmd: 'centering', hint: '' },
+  { cmd: 'vspace', hint: '{length}' },
+  { cmd: 'hspace', hint: '{length}' },
+  { cmd: 'label', hint: '{key}' },
+  { cmd: 'ref', hint: '{key}' },
+  { cmd: 'cite', hint: '{key}' },
+  { cmd: 'footnote', hint: '{text}' },
+  { cmd: 'caption', hint: '{text}' },
+  { cmd: 'item', hint: '' },
+  { cmd: 'frac', hint: '{num}{den}' },
+  { cmd: 'sqrt', hint: '{expr}' },
+  { cmd: 'sum', hint: '' },
+  { cmd: 'int', hint: '' },
+  { cmd: 'infty', hint: '' },
+  { cmd: 'alpha', hint: '' },
+  { cmd: 'beta', hint: '' },
+  { cmd: 'gamma', hint: '' },
+  { cmd: 'delta', hint: '' },
+  { cmd: 'lambda', hint: '' },
+  { cmd: 'pi', hint: '' },
+  { cmd: 'sigma', hint: '' },
+  { cmd: 'theta', hint: '' },
+  { cmd: 'omega', hint: '' },
+  { cmd: 'color', hint: '{color}' },
+  { cmd: 'textcolor', hint: '{color}{text}' },
+  { cmd: 'definecolor', hint: '{name}{model}{def}' },
+  { cmd: 'geometry', hint: '{options}' },
+  { cmd: 'hrule', hint: '' },
+  { cmd: 'hline', hint: '' },
+  { cmd: 'cvsection', hint: '{title}' },
+  { cmd: 'cventry', hint: '{org}{role}{loc}{dates}{body}' },
+  { cmd: 'cvskill', hint: '{category}{skills}' },
+  { cmd: 'cvparagraph', hint: '' },
+  { cmd: 'makecvheader', hint: '' },
+  { cmd: 'name', hint: '{first}{last}' },
+  { cmd: 'position', hint: '{title}' },
+  { cmd: 'email', hint: '{address}' },
+  { cmd: 'github', hint: '{username}' },
+  { cmd: 'linkedin', hint: '{username}' },
+  { cmd: 'textbar', hint: '' },
+  { cmd: 'textperiodcentered', hint: '' },
+  { cmd: 'texteuro', hint: '' },
+  { cmd: 'LaTeX', hint: '' },
+  { cmd: 'today', hint: '' },
+];
+
+const autocompleteState = {
+  visible: false,
+  items: [],
+  selectedIndex: 0,
+  prefix: '',
+  startPos: 0,
+};
+
+function initAutocomplete() {
+  const dropdown = document.getElementById('autocompleteDropdown');
+  if (!dropdown) return;
+
+  elements.editor.addEventListener('input', handleAutocompleteInput);
+  elements.editor.addEventListener('keydown', handleAutocompleteKeydown);
+  elements.editor.addEventListener('blur', () => setTimeout(hideAutocomplete, 150));
+  elements.editor.addEventListener('click', hideAutocomplete);
+}
+
+function handleAutocompleteInput() {
+  const textarea = elements.editor;
+  const pos = textarea.selectionStart;
+  const text = textarea.value.substring(0, pos);
+
+  // Find \command prefix at cursor
+  const match = text.match(/\\([a-zA-Z]*)$/);
+  if (!match || match[0].length < 2) {
+    hideAutocomplete();
+    return;
+  }
+
+  const prefix = match[1].toLowerCase();
+  const startPos = pos - match[1].length;
+  const filtered = AUTOCOMPLETE_COMMANDS.filter(c =>
+    c.cmd.toLowerCase().startsWith(prefix)
+  ).slice(0, 10);
+
+  if (filtered.length === 0) {
+    hideAutocomplete();
+    return;
+  }
+
+  autocompleteState.items = filtered;
+  autocompleteState.prefix = match[1];
+  autocompleteState.startPos = startPos;
+  autocompleteState.selectedIndex = 0;
+  autocompleteState.visible = true;
+
+  renderAutocomplete();
+  positionAutocomplete();
+}
+
+function handleAutocompleteKeydown(e) {
+  if (!autocompleteState.visible) return;
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    autocompleteState.selectedIndex = Math.min(
+      autocompleteState.selectedIndex + 1,
+      autocompleteState.items.length - 1
+    );
+    renderAutocomplete();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    autocompleteState.selectedIndex = Math.max(autocompleteState.selectedIndex - 1, 0);
+    renderAutocomplete();
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
+    if (autocompleteState.items.length > 0) {
+      e.preventDefault();
+      applyAutocomplete(autocompleteState.items[autocompleteState.selectedIndex]);
+    }
+  } else if (e.key === 'Escape') {
+    hideAutocomplete();
+  }
+}
+
+function applyAutocomplete(item) {
+  const textarea = elements.editor;
+  const before = textarea.value.substring(0, autocompleteState.startPos);
+  const after = textarea.value.substring(textarea.selectionStart);
+
+  let insertion = item.cmd;
+  let cursorOffset = insertion.length;
+
+  // Add braces for commands that take arguments
+  if (item.hint.startsWith('{')) {
+    insertion += '{}';
+    cursorOffset = insertion.length - 1;
+  }
+
+  textarea.value = before + insertion + after;
+  textarea.selectionStart = textarea.selectionEnd = autocompleteState.startPos + cursorOffset;
+
+  state.currentLatex = textarea.value;
+  hideAutocomplete();
+  textarea.focus();
+}
+
+function renderAutocomplete() {
+  const dropdown = document.getElementById('autocompleteDropdown');
+  if (!dropdown) return;
+
+  dropdown.innerHTML = autocompleteState.items.map((item, i) => {
+    const sel = i === autocompleteState.selectedIndex ? ' selected' : '';
+    return `<div class="autocomplete-item${sel}" data-index="${i}">
+      <span class="ac-cmd">\\${escapeHtml(item.cmd)}</span>
+      ${item.hint ? `<span class="ac-hint">${escapeHtml(item.hint)}</span>` : ''}
+    </div>`;
+  }).join('');
+
+  dropdown.classList.add('visible');
+
+  dropdown.querySelectorAll('.autocomplete-item').forEach(el => {
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const idx = parseInt(el.dataset.index);
+      applyAutocomplete(autocompleteState.items[idx]);
+    });
+  });
+
+  // Scroll selected into view
+  const selected = dropdown.querySelector('.selected');
+  if (selected) selected.scrollIntoView({ block: 'nearest' });
+}
+
+function positionAutocomplete() {
+  const dropdown = document.getElementById('autocompleteDropdown');
+  const textarea = elements.editor;
+  if (!dropdown || !textarea) return;
+
+  // Approximate cursor position using a mirror div
+  const text = textarea.value.substring(0, textarea.selectionStart);
+  const lines = text.split('\n');
+  const lineNum = lines.length;
+  const colNum = lines[lines.length - 1].length;
+
+  const style = window.getComputedStyle(textarea);
+  const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.4;
+  const charWidth = parseFloat(style.fontSize) * 0.6;
+
+  const top = lineNum * lineHeight - textarea.scrollTop + 4;
+  const left = colNum * charWidth + parseFloat(style.paddingLeft || 0);
+
+  dropdown.style.top = Math.min(top, textarea.offsetHeight - 210) + 'px';
+  dropdown.style.left = Math.min(left, textarea.offsetWidth - 220) + 'px';
+}
+
+function hideAutocomplete() {
+  autocompleteState.visible = false;
+  const dropdown = document.getElementById('autocompleteDropdown');
+  if (dropdown) dropdown.classList.remove('visible');
+}
+
+// ============================================
 // EVENT LISTENERS
 // ============================================
 
@@ -282,41 +537,39 @@ function initializeEventListeners() {
   // Compile button
   elements.compileBtn.addEventListener('click', compile);
   
-  // New document/project dropdown
-  if (elements.newDocBtn && elements.newDropdown) {
-    elements.newDocBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      elements.newDropdown.classList.toggle('open');
+  // New project button (replaces old dropdown)
+  if (elements.newDocBtn) {
+    elements.newDocBtn.addEventListener('click', openNewProjectModal);
+  }
+
+  // New project modal
+  if (elements.closeNewProjectModal) {
+    elements.closeNewProjectModal.addEventListener('click', closeNewProjectModal);
+  }
+  if (elements.newProjectModalOverlay) {
+    elements.newProjectModalOverlay.addEventListener('click', (e) => {
+      if (e.target === elements.newProjectModalOverlay) closeNewProjectModal();
     });
-    
-    // Close dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-      if (elements.newDropdown && !elements.newDropdown.contains(e.target)) {
-        elements.newDropdown.classList.remove('open');
-      }
+  }
+  if (elements.newProjectBlankBtn) {
+    elements.newProjectBlankBtn.addEventListener('click', () => handleNewProjectCreate('blank'));
+  }
+  if (elements.newProjectMultiBtn) {
+    elements.newProjectMultiBtn.addEventListener('click', () => handleNewProjectCreate('multifile'));
+  }
+  if (elements.newProjectZipBtn) {
+    elements.newProjectZipBtn.addEventListener('click', () => handleNewProjectCreate('zip'));
+  }
+
+  // New project from sidebar
+  if (elements.drawerNewProjectBtn) {
+    elements.drawerNewProjectBtn.addEventListener('click', () => {
+      closeProjectsDrawer();
+      openNewProjectModal();
     });
-    
-    // New document item
-    if (elements.newDocItem) {
-      elements.newDocItem.addEventListener('click', (e) => {
-        e.stopPropagation();
-        elements.newDropdown.classList.remove('open');
-        newDocument();
-      });
-    }
-    
-    // New project item
-    if (elements.newProjectItem) {
-      elements.newProjectItem.addEventListener('click', (e) => {
-        e.stopPropagation();
-        elements.newDropdown.classList.remove('open');
-        newProject();
-      });
-    }
   }
   
-  // ZIP upload
-  elements.uploadZipBtn.addEventListener('click', () => elements.zipFileInput.click());
+  // ZIP upload (hidden input, triggered by modal)
   elements.zipFileInput.addEventListener('change', handleZipUpload);
   
   // Download buttons
@@ -417,6 +670,29 @@ function handleEditorChange(e) {
   
   saveToLocalStorage();
   scheduleBackendSave();
+  scheduleLiveValidation();
+}
+
+let _liveValidationTimer = null;
+
+function scheduleLiveValidation() {
+  if (_liveValidationTimer) clearTimeout(_liveValidationTimer);
+  _liveValidationTimer = setTimeout(runLiveValidation, 400);
+}
+
+function runLiveValidation() {
+  let latexContent = state.currentLatex;
+  if (state.projectMode && state.mainFile) {
+    latexContent = state.projectFiles[state.mainFile];
+    latexContent = resolveIncludes(latexContent, state.mainFile);
+  }
+
+  const errors = validateLatexSyntax(latexContent);
+  if (errors.length > 0) {
+    showStatus(`${errors.length} error(s): ${errors[0].message}`, 'error');
+  } else {
+    showStatus('Ready', 'success');
+  }
 }
 
 function updateCursorPosition() {
@@ -479,6 +755,7 @@ async function compile(isInitial = false) {
       showErrorToast(validationErrors[0].message + (validationErrors.length > 1 ? ` (+${validationErrors.length - 1} more)` : ''));
       showStatus(`${validationErrors.length} error(s) found`, 'error');
       console.error('LaTeX validation errors:\n' + errorMsg);
+      clearPreview(validationErrors);
       return;
     }
 
@@ -502,6 +779,7 @@ async function compile(isInitial = false) {
     console.error('Compilation error:', error);
     showStatus('Compilation failed', 'error');
     showErrorToast(error.message || 'Failed to compile LaTeX document');
+    clearPreview([{ line: '?', message: error.message || 'Compilation failed' }]);
   } finally {
     clearTimeout(loadingTimer);
     state.isCompiling = false;
@@ -615,7 +893,158 @@ function validateLatexSyntax(latex) {
     }
   }
 
+  // Comprehensive set of recognized LaTeX commands (preamble, formatting, structure, CV-class)
+  const allRecognizedCommands = new Set([
+    ...knownCommands,
+    ...LATEX_MATH_COMMANDS,
+    // Preamble-only commands
+    'documentclass', 'usepackage', 'newcommand', 'renewcommand', 'newenvironment',
+    'fontdir', 'colorlet', 'setbool', 'geometry', 'linespread', 'definecolor',
+    'RequirePackage', 'ProvidesClass', 'LoadClass', 'DeclareOption', 'ProcessOptions',
+    'pagestyle', 'thispagestyle', 'setlength', 'setcounter', 'addtocounter',
+    // Formatting & structure
+    'textbf', 'textit', 'texttt', 'textsc', 'textsf', 'textrm', 'textsl',
+    'emph', 'underline', 'uppercase', 'lowercase', 'MakeUppercase', 'MakeLowercase',
+    'tiny', 'scriptsize', 'footnotesize', 'small', 'normalsize',
+    'large', 'Large', 'LARGE', 'huge', 'Huge',
+    'color', 'textcolor', 'colorbox', 'fcolorbox',
+    // References & citations
+    'label', 'ref', 'pageref', 'cite', 'nocite', 'bibliography', 'bibliographystyle',
+    'footnote', 'footnotemark', 'footnotetext',
+    // Floats & figures
+    'caption', 'includegraphics', 'centering', 'raggedleft', 'raggedright',
+    // Structure
+    'chapter', 'paragraph', 'subparagraph', 'part',
+    'section', 'subsection', 'subsubsection',
+    // Spacing & layout
+    'vspace', 'hspace', 'vfill', 'hfill', 'newpage', 'clearpage', 'pagebreak',
+    'noindent', 'indent', 'par', 'linebreak', 'newline',
+    'smallskip', 'medskip', 'bigskip',
+    // Boxes
+    'mbox', 'makebox', 'fbox', 'framebox', 'parbox', 'minipage', 'raisebox',
+    // Text symbols
+    'textbar', 'textperiodcentered', 'texteuro', 'textendash', 'textemdash',
+    'textasciitilde', 'textbackslash', 'ldots', 'dots',
+    // Misc standard
+    'LaTeX', 'TeX', 'today', 'thanks', 'rule', 'phantom', 'hphantom', 'vphantom',
+    'multicolumn', 'cline', 'hline', 'toprule', 'midrule', 'bottomrule',
+    'hrule', 'providecommand',
+    'usepackage', 'RequirePackage', 'newenvironment',
+    'labelitemi', 'labelitemii', 'labelitemiii', 'parskip',
+    'extracolsep', 'fill', 'linewidth',
+    // CV-class
+    'name', 'position', 'email', 'github', 'linkedin', 'medium', 'bluesky',
+    'cvsection', 'cventry', 'cvskill', 'cvparagraph', 'cvhonor',
+    'makecvheader', 'makecvfooter',
+    // Links & misc
+    'href', 'url', 'input', 'include', 'item',
+    'maketitle', 'tableofcontents', 'listoffigures', 'listoftables',
+    'appendix', 'frontmatter', 'mainmatter', 'backmatter',
+    'enskip', 'cdotp', 'thepage',
+  ]);
+
+  // Parse user-defined commands and environments from the preamble
+  const preamble = latex.match(/^([\s\S]*?)\\begin\{document\}/);
+  if (preamble) {
+    const newcmdPattern = /\\(?:newcommand|renewcommand|providecommand)\s*\{?\\([a-zA-Z]+)\}?/g;
+    let ncMatch;
+    while ((ncMatch = newcmdPattern.exec(preamble[1])) !== null) {
+      allRecognizedCommands.add(ncMatch[1]);
+    }
+    // Also recognize custom environments used via \begin{name}
+    const newenvPattern = /\\newenvironment\{([a-zA-Z]+)\}/g;
+    let neMatch;
+    while ((neMatch = newenvPattern.exec(preamble[1])) !== null) {
+      allRecognizedCommands.add(neMatch[1]);
+    }
+  }
+
+  // Detect unknown \command patterns in the entire document
+  {
+    const allLines = latex.split('\n');
+    const unknownCmdPattern = /\\([a-zA-Z]+)/g;
+
+    for (let i = 0; i < allLines.length; i++) {
+      const bLine = allLines[i];
+      if (/^\s*%/.test(bLine)) continue;
+      const activeBLine = bLine.replace(/([^\\])%.*$/, '$1');
+      let ucMatch;
+      unknownCmdPattern.lastIndex = 0;
+      while ((ucMatch = unknownCmdPattern.exec(activeBLine)) !== null) {
+        const cmd = ucMatch[1];
+        if (cmd === 'begin' || cmd === 'end') continue;
+        if (!allRecognizedCommands.has(cmd)) {
+          errors.push({
+            line: i + 1,
+            column: ucMatch.index + 1,
+            command: cmd,
+            message: `Command "\\${cmd}" is not supported (line ${i + 1})`,
+            suggestion: '',
+          });
+        }
+      }
+    }
+  }
+
   return errors;
+}
+
+/**
+ * Parse \newcommand / \newenvironment definitions from the preamble
+ * and expand them in the document body.
+ */
+function expandUserMacros(preamble, body) {
+  // Parse \newcommand{\name}[numArgs]{definition}
+  const macroRegex = /\\(?:newcommand|renewcommand)\s*\{?\\([a-zA-Z]+)\}?\s*(?:\[(\d+)\])?\s*/g;
+  const macros = [];
+  let mMatch;
+
+  while ((mMatch = macroRegex.exec(preamble)) !== null) {
+    const name = mMatch[1];
+    const numArgs = parseInt(mMatch[2] || '0', 10);
+    const defGroup = extractBraceGroup(preamble, mMatch.index + mMatch[0].length);
+    if (!defGroup) continue;
+    macros.push({ name, numArgs, definition: defGroup.value });
+  }
+
+  // Expand macros in the body (up to 3 passes for nested macros)
+  let result = body;
+  for (let pass = 0; pass < 3; pass++) {
+    let changed = false;
+    for (const macro of macros) {
+      const pattern = new RegExp('\\\\' + macro.name + '(?![a-zA-Z])', 'g');
+      let match;
+      while ((match = pattern.exec(result)) !== null) {
+        const start = match.index;
+        let pos = start + match[0].length;
+        // Skip whitespace
+        while (pos < result.length && /\s/.test(result[pos])) pos++;
+
+        // Extract arguments
+        const args = [];
+        for (let i = 0; i < macro.numArgs; i++) {
+          const group = extractBraceGroup(result, pos);
+          if (!group) break;
+          args.push(group.value);
+          pos = group.end;
+          while (pos < result.length && /\s/.test(result[pos])) pos++;
+        }
+
+        // Substitute #1, #2, etc. in the definition
+        let expanded = macro.definition;
+        for (let i = 0; i < args.length; i++) {
+          expanded = expanded.replace(new RegExp('#' + (i + 1), 'g'), args[i]);
+        }
+
+        result = result.substring(0, start) + expanded + result.substring(pos);
+        pattern.lastIndex = start + expanded.length;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  return result;
 }
 
 /**
@@ -694,27 +1123,40 @@ function convertLatexToHTML(latex) {
   const docMatch = latex.match(/\\begin\{document\}([\s\S]*?)\\end\{document\}/);
   let content = docMatch ? docMatch[1] : latex;
 
+  // 3.5. Expand user-defined macros from preamble
+  const preamble = latex.match(/^([\s\S]*?)\\begin\{document\}/);
+  if (preamble) {
+    content = expandUserMacros(preamble[1], content);
+  }
+
   // 4. Strip commands that produce no visible output
   content = content
     .replace(/\\makecvheader\b/g, '')
     .replace(/\\makecvfooter[\s\S]*?\{\\thepage\}/g, '')
     .replace(/\\makecvfooter\b/g, '')
     .replace(/\\maketitle/g, '')
-    .replace(/\\vspace\*?\{[^}]*\}/g, '')
-    .replace(/\\hspace\*?\{[^}]*\}/g, '')
     .replace(/\\vfill/g, '')
-    .replace(/\\newpage/g, '')
-    .replace(/\\clearpage/g, '')
-    .replace(/\\pagebreak/g, '')
+    .replace(/\\newpage/g, '<div class="page-break-marker"></div>')
+    .replace(/\\clearpage/g, '<div class="page-break-marker"></div>')
+    .replace(/\\pagebreak/g, '<div class="page-break-marker"></div>')
     .replace(/\\noindent/g, '')
     .replace(/\\centering/g, '')
     .replace(/\\fontdir(\[[^\]]*\])?\{[^}]*\}/g, '')
     .replace(/\\colorlet\{[^}]*\}\{[^}]*\}/g, '')
     .replace(/\\setbool\{[^}]*\}\{[^}]*\}/g, '')
-    .replace(/\\renewcommand\{[^}]*\}\{[^}]*\}/g, '')
     .replace(/\\linespread\{[^}]*\}/g, '')
     .replace(/\\geometry\{[^}]*\}/g, '')
-    .replace(/\\thepage/g, '');
+    .replace(/\\thepage/g, '')
+    // Strip \renewcommand / \setlength / \setcounter / \pagestyle / \parskip assignments
+    .replace(/\\renewcommand[^{]*\{[^}]*\}\{[^}]*\}/g, '')
+    .replace(/\\renewcommand\\[a-zA-Z]+\{[^}]*\}/g, '')
+    .replace(/\\setlength\{[^}]*\}\{[^}]*\}/g, '')
+    .replace(/\\setcounter\{[^}]*\}\{[^}]*\}/g, '')
+    .replace(/\\pagestyle\{[^}]*\}/g, '')
+    .replace(/\\setlength\{\\[a-zA-Z]+\}\{[^}]*\}/g, '')
+    .replace(/\\parskip\s*=\s*[^\n]*/g, '')
+    .replace(/\\labelitemi/g, '')
+    .replace(/\\labelitemii/g, '');
 
   // 4.5. Process LaTeX escape sequences EARLY (before escapeHtml in parseCvEntries)
   content = content.replace(/\\&/g, '&');
@@ -723,6 +1165,70 @@ function convertLatexToHTML(latex) {
   content = content.replace(/\\\$/g, '$');
   content = content.replace(/\\_/g, '_');
   content = content.replace(/\\~/g, '~');
+
+  // 4.6. Text symbol commands → unicode characters
+  content = content
+    .replace(/\\textbar\s*(\{\})?/g, '|')
+    .replace(/\\textperiodcentered\s*(\{\})?/g, '·')
+    .replace(/\\texteuro\s*(\{\})?/g, '€')
+    .replace(/\\textendash\s*(\{\})?/g, '–')
+    .replace(/\\textemdash\s*(\{\})?/g, '—')
+    .replace(/\\textasciitilde\s*(\{\})?/g, '~')
+    .replace(/\\textbackslash\s*(\{\})?/g, '\\')
+    .replace(/\\LaTeX\b/g, 'LaTeX')
+    .replace(/\\TeX\b/g, 'TeX')
+    .replace(/\\ldots/g, '…')
+    .replace(/\\dots/g, '…');
+
+  // 4.7. \vspace / \hspace → small spacing (not stripped entirely)
+  content = content.replace(/\\vspace\*?\{([^}]*)\}/g, (_, val) => {
+    const neg = val.trim().startsWith('-');
+    if (neg) return '';
+    return '<div style="height: 0.5em;"></div>';
+  });
+  content = content.replace(/\\hspace\*?\{[^}]*\}/g, '&nbsp;');
+
+  // 4.8. \hrule → horizontal rule
+  content = content.replace(/\\hrule/g, '<hr style="border: none; border-top: 1px solid #2A2724; margin: 0.3em 0;">');
+
+  // 4.9. \\ (line break) → <br> — but not inside environments that handle it
+  // Process \\ at end-of-line or followed by whitespace/[ — but be careful not to break tabular
+  content = content.replace(/\\\\\s*(?:\[([^\]]*)\])?\s*(?=\n|$)/gm, '<br>');
+
+  // 4.10. \begin{center}...\end{center}
+  content = content.replace(/\\begin\{center\}/g, '<div style="text-align: center;">');
+  content = content.replace(/\\end\{center\}/g, '</div>');
+
+  // 4.11. \begin{tabular*}{...}{...} ... \end{tabular*} → flex row
+  // Uses balanced brace parsing to handle nested braces in column specs
+  content = parseTabularEnvs(content);
+
+  // 4.12. \begin{list}...\end{list}, \begin{indentsection}...\end{indentsection}
+  content = content.replace(/\\begin\{list\}(?:\{[^}]*\})*(?:\{[\s\S]*?\})?/g, '<div style="padding-left: 1em;">');
+  content = content.replace(/\\end\{list\}/g, '</div>');
+  content = content.replace(/\\begin\{indentsection\}\{[^}]*\}/g, '<div style="padding-left: 1em;">');
+  content = content.replace(/\\end\{indentsection\}/g, '</div>');
+
+  // 4.13. Font size commands wrapping text
+  content = content.replace(/\{\\LARGE\s+([^}]*)\}/g, '<span style="font-size: 17pt;">$1</span>');
+  content = content.replace(/\{\\Large\s+([^}]*)\}/g, '<span style="font-size: 14pt;">$1</span>');
+  content = content.replace(/\{\\large\s+([^}]*)\}/g, '<span style="font-size: 12pt;">$1</span>');
+  content = content.replace(/\{\\small\s+([^}]*)\}/g, '<span style="font-size: 9pt;">$1</span>');
+  // Also when used as \\LARGE inside headings
+  content = content.replace(/\\LARGE\s+/g, '');
+  content = content.replace(/\\Large\s+/g, '');
+  content = content.replace(/\\large\s+/g, '');
+  content = content.replace(/\\small\s+/g, '');
+
+  // 4.14. \item[] → item without marker
+  content = content.replace(/\\item\[\]/g, '<li style="list-style: none; margin-left: -1.5em;">');
+
+  // 4.15. Section headings (process BEFORE font-size stripping so \Large inside args works)
+  content = content
+    .replace(/\\section\*?\{([^}]*)\}/g, (_, s) => `<h2>${s.replace(/\\Large\s*/g, '').replace(/\\LARGE\s*/g, '').replace(/\\large\s*/g, '')}</h2>`)
+    .replace(/\\subsection\*?\{([^}]*)\}/g, (_, s) => `<h3>${s.replace(/\\Large\s*/g, '').replace(/\\LARGE\s*/g, '').replace(/\\large\s*/g, '')}</h3>`)
+    .replace(/\\subsubsection\*?\{([^}]*)\}/g, (_, s) => `<h4>${s.replace(/\\Large\s*/g, '').replace(/\\LARGE\s*/g, '').replace(/\\large\s*/g, '')}</h4>`)
+    .replace(/\\paragraph\*?\{([^}]*)\}/g, (_, s) => `<h5>${s}</h5>`);
 
   // 5. Handle \href{url}{text} → link
   content = content.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, url, text) => {
@@ -775,18 +1281,20 @@ function convertLatexToHTML(latex) {
     .replace(/\\begin\{cvitems\}/g, '<ul class="cv-items">')
     .replace(/\\end\{cvitems\}/g, '</ul>');
 
-  // 11. Standard LaTeX conversions
+  // 11. Standard LaTeX conversions (sections already handled in 4.15)
   content = content
-    .replace(/\\section\*?\{([^}]*)\}/g, (_, s) => `<h2>${escapeHtml(s)}</h2>`)
-    .replace(/\\subsection\*?\{([^}]*)\}/g, (_, s) => `<h3>${escapeHtml(s)}</h3>`)
-    .replace(/\\subsubsection\*?\{([^}]*)\}/g, (_, s) => `<h4>${escapeHtml(s)}</h4>`)
-    .replace(/\\textbf\{([^}]*)\}/g, (_, s) => `<strong>${escapeHtml(s)}</strong>`)
-    .replace(/\\textit\{([^}]*)\}/g, (_, s) => `<em>${escapeHtml(s)}</em>`)
-    .replace(/\\texttt\{([^}]*)\}/g, (_, s) => `<code>${escapeHtml(s)}</code>`)
-    .replace(/\\emph\{([^}]*)\}/g, (_, s) => `<em>${escapeHtml(s)}</em>`)
-    .replace(/\\begin\{itemize\}/g, '<ul>')
+    .replace(/\\textbf\{([^}]*)\}/g, (_, s) => `<strong>${s}</strong>`)
+    .replace(/\\textit\{([^}]*)\}/g, (_, s) => `<em>${s}</em>`)
+    .replace(/\\texttt\{([^}]*)\}/g, (_, s) => `<code>${s}</code>`)
+    .replace(/\\textsc\{([^}]*)\}/g, (_, s) => `<span style="font-variant: small-caps;">${s}</span>`)
+    .replace(/\\emph\{([^}]*)\}/g, (_, s) => `<em>${s}</em>`)
+    .replace(/\\underline\{([^}]*)\}/g, (_, s) => `<u>${s}</u>`)
+    // itemize* (compact, from mdwlist) and itemize with options
+    .replace(/\\begin\{itemize\*\}/g, '<ul class="compact-list">')
+    .replace(/\\end\{itemize\*\}/g, '</ul>')
+    .replace(/\\begin\{itemize\}(?:\[[^\]]*\])?/g, '<ul>')
     .replace(/\\end\{itemize\}/g, '</ul>')
-    .replace(/\\begin\{enumerate\}/g, '<ol>')
+    .replace(/\\begin\{enumerate\}(?:\[[^\]]*\])?/g, '<ol>')
     .replace(/\\end\{enumerate\}/g, '</ol>')
     .replace(/\\item\s*/g, '<li>')
     .replace(/\\begin\{equation\}/g, '\\[')
@@ -828,15 +1336,50 @@ function convertLatexToHTML(latex) {
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Source+Serif+4:wght@300;400;600&display=swap');
 
+        *, *::before, *::after { box-sizing: border-box; }
+
         body {
           font-family: 'Source Serif 4', Georgia, serif;
           font-size: 10pt;
           line-height: 1.45;
-          max-width: 8.5in;
-          margin: 0.4in auto;
-          padding: 0 0.5in;
           color: #2A2724;
+          background: #e8e4de;
+          margin: 0;
+          padding: 20px 0;
+        }
+
+        .page {
+          width: 8.5in;
+          min-height: 11in;
+          margin: 0 auto 24px auto;
+          padding: 0.4in 0.5in;
           background: white;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.12), 0 1px 3px rgba(0,0,0,0.08);
+          position: relative;
+          overflow: hidden;
+        }
+
+        .page-number {
+          position: absolute;
+          bottom: 0.3in;
+          left: 0;
+          right: 0;
+          text-align: center;
+          font-size: 8pt;
+          color: #888;
+          font-family: 'Source Serif 4', Georgia, serif;
+        }
+
+        @media print {
+          body { background: white; padding: 0; margin: 0; }
+          .page {
+            box-shadow: none;
+            margin: 0;
+            page-break-after: always;
+            min-height: auto;
+          }
+          .page:last-child { page-break-after: avoid; }
+          .page-number { display: none; }
         }
 
         h1, h2, h3, h4 {
@@ -937,7 +1480,7 @@ function convertLatexToHTML(latex) {
           height: 1px;
           background: #B0ACA4;
         }
-        .cv-entry { margin-bottom: 0.5em; }
+        .cv-entry { margin-bottom: 0.5em; break-inside: avoid; }
         .cv-entry-header, .cv-entry-subheader {
           display: flex;
           justify-content: space-between;
@@ -978,6 +1521,11 @@ function convertLatexToHTML(latex) {
         .cv-items li { margin: 0.02em 0; font-size: 9.5pt; }
 
         br + br { display: none; }
+        .page-break-marker { display: none; }
+        .compact-list { margin: 0; padding-left: 1.5em; }
+        .compact-list li { margin: 0; padding: 0; line-height: 1.3; }
+        hr { break-inside: avoid; }
+        h2, h3, h4, h5 { break-after: avoid; }
       </style>
 
       <script>
@@ -996,13 +1544,235 @@ function convertLatexToHTML(latex) {
       <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     </head>
     <body>
-      ${title ? `<h1>${title}</h1>` : ''}
-      ${subtitle ? `<div class="author">${subtitle}</div>` : ''}
-      ${contactLine ? `<div class="date">${contactLine}</div>` : ''}
-      ${content}
+      <div class="page" id="page-1">
+        ${title ? `<h1>${title}</h1>` : ''}
+        ${subtitle ? `<div class="author">${subtitle}</div>` : ''}
+        ${contactLine ? `<div class="date">${contactLine}</div>` : ''}
+        ${content}
+      </div>
+
+      <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        requestAnimationFrame(() => { setTimeout(paginate, 500); });
+      });
+
+      function wrapTextNodes(parent) {
+        const nodes = Array.from(parent.childNodes);
+        let buffer = [];
+        const groups = [];
+        for (const node of nodes) {
+          const isBlock = node.nodeType === 1 &&
+            window.getComputedStyle(node).display !== 'inline';
+          if (isBlock) {
+            if (buffer.length) { groups.push(buffer); buffer = []; }
+            groups.push([node]);
+          } else if (node.nodeType === 3 && !node.textContent.trim()) {
+            // skip whitespace-only text
+          } else {
+            buffer.push(node);
+          }
+        }
+        if (buffer.length) groups.push(buffer);
+
+        while (parent.firstChild) parent.removeChild(parent.firstChild);
+        for (const group of groups) {
+          if (group.length === 1 && group[0].nodeType === 1 &&
+              window.getComputedStyle(group[0]).display !== 'inline') {
+            parent.appendChild(group[0]);
+          } else {
+            const w = document.createElement('div');
+            group.forEach(n => w.appendChild(n));
+            parent.appendChild(w);
+          }
+        }
+      }
+
+      function paginate() {
+        const PAGE_HEIGHT = 11 * 96;
+        const PADDING_V  = 0.4 * 96;
+        const FOOTER_H   = 0.35 * 96;
+        const USABLE     = PAGE_HEIGHT - 2 * PADDING_V - FOOTER_H;
+
+        const firstPage = document.getElementById('page-1');
+        if (!firstPage) return;
+
+        wrapTextNodes(firstPage);
+
+        const children = Array.from(firstPage.children);
+        const pages = [firstPage];
+        children.forEach(c => firstPage.removeChild(c));
+
+        let currentPage = firstPage;
+        let currentHeight = 0;
+
+        function newPage() {
+          const page = document.createElement('div');
+          page.className = 'page';
+          document.body.appendChild(page);
+          pages.push(page);
+          currentHeight = 0;
+          return page;
+        }
+
+        for (const child of children) {
+          if (child.classList && child.classList.contains('page-break-marker')) {
+            currentPage = newPage();
+            continue;
+          }
+
+          currentPage.appendChild(child);
+          const childHeight = child.getBoundingClientRect().height;
+
+          if (currentHeight + childHeight > USABLE && currentHeight > 0) {
+            currentPage.removeChild(child);
+            currentPage = newPage();
+            currentPage.appendChild(child);
+            currentHeight = child.getBoundingClientRect().height;
+          } else {
+            currentHeight += childHeight;
+          }
+        }
+
+        const total = pages.length;
+        pages.forEach((page, i) => {
+          page.id = 'page-' + (i + 1);
+          const num = document.createElement('div');
+          num.className = 'page-number';
+          num.textContent = (i + 1) + ' / ' + total;
+          page.appendChild(num);
+        });
+
+        if (window.parent !== window) {
+          window.parent.postMessage({ type: 'latex-page-count', count: total }, '*');
+        }
+      }
+      </script>
     </body>
     </html>
   `;
+}
+
+/**
+ * Process inline LaTeX commands in CV field text to produce clean HTML.
+ * Strips formatting commands like \textbf, \textit while preserving their content,
+ * removes remaining \command{arg} → arg, and cleans stray braces.
+ */
+function processCvFieldText(text) {
+  if (!text) return '';
+  let t = text;
+  // Strip \color{...} using balanced brace extraction
+  t = processBalancedCmd(t, 'color', () => '');
+  // \textbf{...} → <strong>...</strong>
+  t = processBalancedCmd(t, 'textbf', inner => `<strong>${processCvFieldText(inner)}</strong>`);
+  // \textit{...} / \emph{...} → <em>...</em>
+  t = processBalancedCmd(t, 'textit', inner => `<em>${processCvFieldText(inner)}</em>`);
+  t = processBalancedCmd(t, 'emph', inner => `<em>${processCvFieldText(inner)}</em>`);
+  // \texttt{...} → <code>...</code>
+  t = processBalancedCmd(t, 'texttt', inner => `<code>${processCvFieldText(inner)}</code>`);
+  // \href{url}{text}
+  t = t.replace(/\\href/g, (_, offset) => {
+    const urlGroup = extractBraceGroup(t, offset + 5);
+    if (!urlGroup) return _;
+    const textGroup = extractBraceGroup(t, urlGroup.end);
+    if (!textGroup) return _;
+    return ''; // handled below
+  });
+  // Manual \href handling with balanced braces
+  let hrefIdx;
+  while ((hrefIdx = t.indexOf('\\href')) !== -1) {
+    const urlGroup = extractBraceGroup(t, hrefIdx + 5);
+    if (!urlGroup) break;
+    const textGroup = extractBraceGroup(t, urlGroup.end);
+    if (!textGroup) break;
+    const url = escapeHtml(urlGroup.value);
+    const linkText = processCvFieldText(textGroup.value);
+    t = t.substring(0, hrefIdx) + `<a href="${url}" target="_blank" rel="noopener">${linkText}</a>` + t.substring(textGroup.end);
+  }
+  // Strip any remaining \command{arg} → arg (using balanced braces)
+  const cmdRe = /\\([a-zA-Z]+)/g;
+  let cmdMatch;
+  while ((cmdMatch = cmdRe.exec(t)) !== null) {
+    if (LATEX_MATH_COMMANDS.includes(cmdMatch[1])) continue;
+    const braceGroup = extractBraceGroup(t, cmdMatch.index + cmdMatch[0].length);
+    if (braceGroup) {
+      t = t.substring(0, cmdMatch.index) + braceGroup.value + t.substring(braceGroup.end);
+      cmdRe.lastIndex = cmdMatch.index;
+    } else {
+      t = t.substring(0, cmdMatch.index) + t.substring(cmdMatch.index + cmdMatch[0].length);
+      cmdRe.lastIndex = cmdMatch.index;
+    }
+  }
+  // Remove stray braces
+  t = t.replace(/\{([^{}]*)\}/g, '$1');
+  return t.trim();
+}
+
+/**
+ * Process a specific \command{...} using balanced brace extraction.
+ * Calls replacer(innerContent) for each match.
+ */
+function processBalancedCmd(str, cmdName, replacer) {
+  const pattern = new RegExp('\\\\' + cmdName + '(?![a-zA-Z])');
+  let match;
+  while ((match = str.match(pattern)) !== null) {
+    const cmdStart = match.index;
+    const group = extractBraceGroup(str, cmdStart + match[0].length);
+    if (!group) break;
+    const replacement = replacer(group.value);
+    str = str.substring(0, cmdStart) + replacement + str.substring(group.end);
+  }
+  return str;
+}
+
+/**
+ * Parse \begin{tabular*} and \begin{tabular} environments using balanced
+ * brace extraction so nested braces in column specs are handled correctly.
+ */
+function parseTabularEnvs(content) {
+  const regex = /\\begin\{tabular\*?\}/g;
+  let match;
+
+  while ((match = regex.exec(content)) !== null) {
+    const startPos = match.index;
+    let pos = match.index + match[0].length;
+
+    // Skip all brace-group arguments (width spec, column spec, etc.)
+    while (pos < content.length) {
+      const ws = content.substring(pos).match(/^\s*/);
+      if (ws) pos += ws[0].length;
+      if (content[pos] === '{') {
+        const group = extractBraceGroup(content, pos);
+        if (!group) break;
+        pos = group.end;
+      } else {
+        break;
+      }
+    }
+
+    // Find matching \end{tabular*} or \end{tabular}
+    const endPattern = /\\end\{tabular\*?\}/g;
+    endPattern.lastIndex = pos;
+    const endMatch = endPattern.exec(content);
+    if (!endMatch) continue;
+
+    const body = content.substring(pos, endMatch.index);
+    const endPos = endMatch.index + endMatch[0].length;
+
+    // Convert tabular body: split on & for columns, \\ for rows
+    const rows = body.split(/\\\\/).filter(r => r.trim());
+    const html = rows.map(row => {
+      const cols = row.split('&').map(c => c.trim());
+      if (cols.length >= 2) {
+        return `<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.5em;"><div>${cols[0]}</div><div style="text-align: right; flex-shrink: 0;">${cols[1]}</div></div>`;
+      }
+      return `<div>${cols[0] || ''}</div>`;
+    }).join('');
+
+    content = content.substring(0, startPos) + html + content.substring(endPos);
+    regex.lastIndex = startPos + html.length;
+  }
+
+  return content;
 }
 
 /**
@@ -1029,30 +1799,31 @@ function parseCvEntries(content) {
     }
 
     if (args.length >= 2) {
-      const org = (args[0] || '').replace(/\\color\{[^}]*\}/g, '');
-      const role = (args[1] || '').replace(/\\color\{[^}]*\}/g, '');
-      const location = (args[2] || '').replace(/\\color\{[^}]*\}/g, '');
-      const dates = (args[3] || '').replace(/\\color\{[^}]*\}/g, '');
+      const org = args[0] || '';
+      const role = args[1] || '';
+      const location = args[2] || '';
+      const dates = args[3] || '';
       const body = args[4] || '';
 
-      // Process \href inside org/role
+      // Process \href inside org/role, then clean remaining LaTeX commands
       const processedOrg = org.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, u, t) =>
-        `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${escapeHtml(t.replace(/\\color\{[^}]*\}/g, ''))}</a>`
+        `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${processCvFieldText(t)}</a>`
       );
+      const orgHtml = processedOrg.includes('<a ') ? processedOrg : processCvFieldText(org);
+
       const processedRole = role.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_, u, t) =>
-        `<a href="${escapeHtml(u)}" target="_blank" rel="noopener" class="cv-entry-role-link">${escapeHtml(t.replace(/\\color\{[^}]*\}/g, ''))}</a>`
+        `<a href="${escapeHtml(u)}" target="_blank" rel="noopener" class="cv-entry-role-link">${processCvFieldText(t)}</a>`
       );
-      // If role still has unprocessed text (no href), escape it
-      const roleHtml = processedRole.includes('<a ') ? processedRole.trim() : escapeHtml(role.trim());
+      const roleHtml = processedRole.includes('<a ') ? processedRole : processCvFieldText(role);
 
       const html = `<div class="cv-entry">
         <div class="cv-entry-header">
           <div class="cv-entry-left"><span class="cv-entry-role">${roleHtml}</span></div>
-          ${location.trim() ? `<div class="cv-entry-right"><em>${escapeHtml(location.trim())}</em></div>` : ''}
+          ${location.trim() ? `<div class="cv-entry-right"><em>${processCvFieldText(location)}</em></div>` : ''}
         </div>
         ${org.trim() || dates.trim() ? `<div class="cv-entry-subheader">
-          <div class="cv-entry-left"><span class="cv-entry-org">${processedOrg.trim()}</span></div>
-          ${dates.trim() ? `<div class="cv-entry-right"><em>${escapeHtml(dates.trim())}</em></div>` : ''}
+          <div class="cv-entry-left"><span class="cv-entry-org">${orgHtml}</span></div>
+          ${dates.trim() ? `<div class="cv-entry-right"><em>${processCvFieldText(dates)}</em></div>` : ''}
         </div>` : ''}
         <div class="cv-entry-body">${body}</div>
       </div>`;
@@ -1091,9 +1862,9 @@ function parseCvSkills(content) {
     }
 
     if (args.length >= 2) {
-      const cat = args[0].replace(/\\color\{[^}]*\}/g, '').trim();
-      const skills = args[1].replace(/\\color\{[^}]*\}/g, '').trim();
-      const html = `<div class="cv-skill"><span class="cv-skill-label">${escapeHtml(cat)}</span><span class="cv-skill-value">${escapeHtml(skills)}</span></div>`;
+      const cat = processCvFieldText(args[0]);
+      const skills = processCvFieldText(args[1]);
+      const html = `<div class="cv-skill"><span class="cv-skill-label">${cat}</span><span class="cv-skill-value">${skills}</span></div>`;
       replacements.push({ start: startPos, end: pos, html });
     }
   }
@@ -1111,34 +1882,88 @@ function parseCvSkills(content) {
 // ============================================
 
 /**
- * Render the compiled HTML into the preview panel.
- * Uses document.write into a fresh iframe — avoids srcdoc/blob onload loops.
+ * Clear the preview panel and show compilation errors.
  */
-function renderPDF(htmlString, generation) {
-  // Stale check
-  if (generation !== state.compileGeneration) return;
+function clearPreview(errors) {
+  state.pdfData = null;
+  state.lastHtmlContent = null;
 
-  // Remove all existing children (old iframes, welcome message)
   while (elements.previewContent.firstChild) {
     elements.previewContent.removeChild(elements.previewContent.firstChild);
   }
 
-  // Create a fresh iframe
+  const errorDiv = document.createElement('div');
+  errorDiv.style.cssText = 'padding: 2em; font-family: "JetBrains Mono", monospace; font-size: 10pt; color: #c0392b; background: #fdf2f2; border: 1px solid #e6b0aa; border-radius: 4px; margin: 1em;';
+  const heading = document.createElement('h3');
+  heading.style.cssText = 'margin: 0 0 0.8em 0; color: #922b21; font-size: 12pt;';
+  heading.textContent = `Compilation failed — ${errors.length} error(s)`;
+  errorDiv.appendChild(heading);
+
+  const list = document.createElement('ul');
+  list.style.cssText = 'margin: 0; padding-left: 1.5em; list-style: none;';
+  for (const err of errors) {
+    const li = document.createElement('li');
+    li.style.cssText = 'margin: 0.3em 0; line-height: 1.4;';
+    li.textContent = `Line ${err.line}: ${err.message}`;
+    list.appendChild(li);
+  }
+  errorDiv.appendChild(list);
+  elements.previewContent.appendChild(errorDiv);
+}
+
+/**
+ * Render the compiled HTML into the preview panel.
+ * Uses document.write into a fresh iframe — avoids srcdoc/blob onload loops.
+ */
+function renderPDF(htmlString, generation) {
+  if (generation !== state.compileGeneration) return;
+
+  while (elements.previewContent.firstChild) {
+    elements.previewContent.removeChild(elements.previewContent.firstChild);
+  }
+
   const iframe = document.createElement('iframe');
-  iframe.style.width = '100%';
-  iframe.style.minHeight = '11in';
+  iframe.style.width = '8.5in';
   iframe.style.border = 'none';
-  iframe.style.background = 'white';
-  iframe.style.boxShadow = '0 20px 25px rgba(42, 39, 36, 0.1), 0 10px 10px rgba(42, 39, 36, 0.04)';
-  iframe.style.borderRadius = '2px';
+  iframe.style.background = 'transparent';
+  iframe.style.display = 'block';
+  iframe.style.margin = '0 auto';
 
   elements.previewContent.appendChild(iframe);
 
-  // Write content directly — no onload needed
   const doc = iframe.contentDocument || iframe.contentWindow.document;
   doc.open();
   doc.write(htmlString);
   doc.close();
+
+  // Listen for page count — remove any previous listener first
+  if (state._pageCountListener) {
+    window.removeEventListener('message', state._pageCountListener);
+  }
+  state._pageCountListener = function onMsg(e) {
+    if (e.data && e.data.type === 'latex-page-count' && e.source === iframe.contentWindow) {
+      window.removeEventListener('message', onMsg);
+      state._pageCountListener = null;
+      state.pageCount = e.data.count;
+    }
+  };
+  window.addEventListener('message', state._pageCountListener);
+
+  // Auto-resize iframe to fit all paginated content
+  const resizeIframe = () => {
+    try {
+      const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+      if (iframeDoc && iframeDoc.body) {
+        const height = iframeDoc.body.scrollHeight;
+        iframe.style.height = height + 'px';
+      }
+    } catch (e) { /* cross-origin guard */ }
+  };
+
+  // Resize after initial render and after pagination script runs
+  setTimeout(resizeIframe, 100);
+  setTimeout(resizeIframe, 700);
+  setTimeout(resizeIframe, 1500);
 
   applyZoom();
 }
@@ -1158,9 +1983,9 @@ function applyZoom() {
   if (iframe) {
     iframe.style.transform = `scale(${state.zoom})`;
     iframe.style.transformOrigin = 'top center';
-    // Adjust spacing: 11 inches (A4 page height) * 96 DPI = pixels
-    const pageHeightPixels = 11 * 96;
-    iframe.style.marginBottom = `${(state.zoom - 1) * pageHeightPixels}px`;
+    // Estimate total height and adjust margin to prevent cutoff
+    const iframeHeight = parseFloat(iframe.style.height) || (11 * 96);
+    iframe.style.marginBottom = `${(state.zoom - 1) * iframeHeight}px`;
   }
 }
 
@@ -1290,71 +2115,17 @@ function downloadTeX() {
 }
 
 // ============================================
-// NEW DOCUMENT
+// NEW PROJECT (unified — single files are also projects)
 // ============================================
 
-function newDocument() {
-  if (state.currentLatex !== DEFAULT_TEMPLATE && 
-      !confirm('Create new document? Current changes will be lost.')) {
-    return;
-  }
-  
-  // Save current project to backend before switching
-  if (state.projectMode && state.currentProjectId) {
-    saveProjectToBackend();
-  }
-  
-  // Reset project state (keep currentProjectId — project still exists in DB)
-  state.projectMode = false;
-  state.projectFiles = {};
-  state.currentFile = null;
-  state.mainFile = null;
-  state.currentProjectId = null;
-  state.currentProjectName = null;
-  
-  state.currentLatex = DEFAULT_TEMPLATE;
-  elements.editor.value = DEFAULT_TEMPLATE;
-  elements.editor.readOnly = false;
-  elements.currentFileName.textContent = 'LaTeX Source';
-  
-  // Hide file tree and download ZIP button
-  elements.fileTree.classList.remove('visible');
-  elements.toggleFileTreeBtn.style.display = 'none';
-  elements.downloadZipBtn.style.display = 'none';
-  
-  // Clear project from localStorage
-  try {
-    localStorage.removeItem('latexEditor_project');
-    localStorage.removeItem('latexEditor_projectMode');
-  } catch (error) {
-    console.error('Failed to clear project from localStorage:', error);
-  }
-  
-  saveToLocalStorage();
-  
-  // Compile the new document
-  compile(true);
-}
-
 /**
- * Create a new multi-file project from scratch
+ * Create a new blank single-file project (just main.tex)
  */
-function newProject() {
-  const projectName = prompt('Enter project name:', 'my-project');
-  if (!projectName) return;
-  
-  if (state.projectMode && Object.keys(state.projectFiles).length > 0 &&
-      !confirm('Create new project? You will switch away from the current project.')) {
-    return;
-  }
-  
-  // Save current project to backend before switching
+function createBlankProject(projectName) {
   if (state.projectMode && state.currentProjectId) {
     saveProjectToBackend();
   }
-  
-  // Create basic project structure
-  // Convert project name to title case and escape LaTeX special characters
+
   const projectTitle = escapeLatex(
     projectName
       .replace(/-/g, ' ')
@@ -1363,7 +2134,67 @@ function newProject() {
       .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(' ')
   );
-  
+
+  const mainContent = `\\documentclass{article}
+\\usepackage[utf8]{inputenc}
+\\usepackage{amsmath}
+\\usepackage{graphicx}
+
+\\title{${projectTitle}}
+\\author{Your Name}
+\\date{\\today}
+
+\\begin{document}
+
+\\maketitle
+
+\\section{Introduction}
+
+Start writing your document here.
+
+\\end{document}
+`;
+
+  state.projectFiles = { 'main.tex': mainContent };
+  state.mainFile = 'main.tex';
+  state.currentFile = 'main.tex';
+  state.projectMode = true;
+  state.currentLatex = mainContent;
+
+  elements.editor.value = mainContent;
+  elements.editor.readOnly = false;
+  elements.currentFileName.textContent = 'main.tex';
+
+  buildFileTree(state.projectFiles);
+  elements.fileTree.classList.add('visible');
+  elements.toggleFileTreeBtn.style.display = 'inline-block';
+  elements.downloadZipBtn.style.display = 'inline-block';
+
+  saveProjectToLocalStorage();
+  state.currentProjectName = projectName;
+  saveProjectToBackend();
+
+  showSuccessToast(`Created project: ${projectName}`);
+  compile(true);
+}
+
+/**
+ * Create a new multi-file project with sections/ structure
+ */
+function createMultiFileProject(projectName) {
+  if (state.projectMode && state.currentProjectId) {
+    saveProjectToBackend();
+  }
+
+  const projectTitle = escapeLatex(
+    projectName
+      .replace(/-/g, ' ')
+      .replace(/_/g, ' ')
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ')
+  );
+
   const mainContent = `\\documentclass{article}
 \\usepackage[utf8]{inputenc}
 \\usepackage{amsmath}
@@ -1395,40 +2226,77 @@ This is your new LaTeX project. Edit this file or create new sections.
 \\end{itemize}
 `;
 
-  // Initialize project files
   state.projectFiles = {
     'main.tex': mainContent,
-    'sections/introduction.tex': introContent
+    'sections/introduction.tex': introContent,
   };
-  
+
   state.mainFile = 'main.tex';
   state.currentFile = 'main.tex';
   state.projectMode = true;
   state.currentLatex = mainContent;
-  
-  // Update UI
+
   elements.editor.value = mainContent;
   elements.editor.readOnly = false;
   elements.currentFileName.textContent = 'main.tex';
-  
-  // Build and show file tree
+
   buildFileTree(state.projectFiles);
   elements.fileTree.classList.add('visible');
   elements.toggleFileTreeBtn.style.display = 'inline-block';
   elements.downloadZipBtn.style.display = 'inline-block';
-  
-  // Save project to localStorage
+
   saveProjectToLocalStorage();
-  
-  // Save to backend
   state.currentProjectName = projectName;
   saveProjectToBackend();
-  
+
   showSuccessToast(`Created project: ${projectName}`);
-  
-  // Compile the new project
   compile(true);
 }
+
+/**
+ * Open the new project modal.
+ * Replaces the old separate newDocument() / newProject() flows.
+ */
+function openNewProjectModal() {
+  if (state.projectMode && Object.keys(state.projectFiles).length > 0 &&
+      state.currentLatex !== DEFAULT_TEMPLATE &&
+      !confirm('Create new project? You will switch away from the current project.')) {
+    return;
+  }
+  elements.newProjectModalOverlay.style.display = 'flex';
+  elements.newProjectName.value = '';
+  elements.newProjectName.focus();
+}
+
+function closeNewProjectModal() {
+  elements.newProjectModalOverlay.style.display = 'none';
+}
+
+function handleNewProjectCreate(type) {
+  const name = elements.newProjectName.value.trim();
+  if (!name) {
+    showErrorToast('Please enter a project name');
+    elements.newProjectName.focus();
+    return;
+  }
+
+  closeNewProjectModal();
+  closeProjectsDrawer();
+
+  if (type === 'blank') {
+    createBlankProject(name);
+  } else if (type === 'multifile') {
+    createMultiFileProject(name);
+  } else if (type === 'zip') {
+    // Store the name for the zip upload handler, then trigger file picker
+    state._pendingProjectName = name;
+    elements.zipFileInput.click();
+  }
+}
+
+// Keep newDocument/newProject as aliases for backward compat (event listeners)
+function newDocument() { openNewProjectModal(); }
+function newProject() { openNewProjectModal(); }
 
 // ============================================
 // LOCAL STORAGE
@@ -1636,7 +2504,8 @@ function saveProjectToLocalStorage() {
 }
 
 /**
- * Load from localStorage
+ * Load from localStorage. Returns true if a project was restored.
+ * Simple document content is only used as a fallback — projects take priority.
  */
 function loadFromLocalStorage() {
   try {
@@ -1650,18 +2519,107 @@ function loadFromLocalStorage() {
     // Try to load project first
     if (isProjectMode) {
       const success = loadProjectFromLocalStorage();
-      if (success) return;
+      if (success) return true;
+    }
+
+    // If there's a lastProjectId, DON'T fall back to simple content —
+    // let the backend load handle it (the simple content lacks project files)
+    if (localStorage.getItem('latexEditor_lastProjectId')) {
+      return false;
     }
     
-    // Fall back to simple document
+    // Fall back to simple document only if there's no project to restore
     const savedContent = localStorage.getItem('latexEditor_content');
     if (savedContent && savedContent !== DEFAULT_TEMPLATE) {
       state.currentLatex = savedContent;
       elements.editor.value = savedContent;
+      return true;
     }
+
+    return false;
   } catch (error) {
     console.error('Failed to load from localStorage:', error);
+    return false;
   }
+}
+
+/**
+ * Load the last opened project from the backend.
+ * Tries the stored project ID first, then falls back to most recently updated.
+ * Retries once after a short delay if the first attempt fails (Docker startup race).
+ */
+async function loadLastProjectFromBackend() {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const lastProjectId = localStorage.getItem('latexEditor_lastProjectId');
+
+      if (lastProjectId) {
+        const res = await fetch(`${API_BASE}/projects/${lastProjectId}`);
+        if (res.ok) {
+          const project = await res.json();
+          restoreProject(project);
+          return true;
+        }
+      }
+
+      // Fall back to most recently updated project
+      const listRes = await fetch(`${API_BASE}/projects`);
+      if (!listRes.ok) throw new Error(`HTTP ${listRes.status}`);
+      const data = await listRes.json();
+      const projects = data.projects || [];
+      if (projects.length === 0) return false;
+
+      const latest = projects[0];
+      const res = await fetch(`${API_BASE}/projects/${latest.id}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const project = await res.json();
+      restoreProject(project);
+      return true;
+    } catch (err) {
+      if (attempt === 0) {
+        console.warn('Backend not ready, retrying in 1s...', err.message);
+        await new Promise(r => setTimeout(r, 1000));
+      } else {
+        console.error('Failed to load project from backend:', err);
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Restore a project from API response data into the editor state.
+ */
+function restoreProject(project) {
+  state.projectFiles = project.files || {};
+  state.mainFile = project.main_file;
+  state.currentFile = project.main_file;
+  state.projectMode = true;
+  state.currentProjectId = project.id;
+  state.currentProjectName = project.name;
+
+  const fileContent = state.projectFiles[state.mainFile];
+  if (isBinaryContent(fileContent)) {
+    state.currentLatex = `[Binary file: ${state.mainFile}]`;
+    elements.editor.readOnly = true;
+  } else {
+    state.currentLatex = fileContent || '';
+    elements.editor.readOnly = false;
+  }
+  elements.editor.value = state.currentLatex;
+  elements.currentFileName.textContent = state.mainFile
+    ? state.mainFile.split('/').pop()
+    : 'LaTeX Source';
+
+  buildFileTree(state.projectFiles);
+  elements.fileTree.classList.add('visible');
+  elements.toggleFileTreeBtn.style.display = 'inline-block';
+  elements.downloadZipBtn.style.display = 'inline-block';
+
+  // Save project ID for next restart
+  localStorage.setItem('latexEditor_lastProjectId', project.id);
+
+  showSuccessToast(`Restored project: ${project.name}`);
 }
 
 /**
@@ -1934,7 +2892,10 @@ function cleanCurrentProject() {
 
 async function handleZipUpload(event) {
   const file = event.target.files[0];
-  if (!file) return;
+  if (!file) {
+    state._pendingProjectName = null;
+    return;
+  }
   
   // Save current project to backend before loading a new one
   if (state.projectMode && state.currentProjectId) {
@@ -1942,6 +2903,7 @@ async function handleZipUpload(event) {
   }
   
   if (!file.name.endsWith('.zip')) {
+    state._pendingProjectName = null;
     showErrorToast('Please upload a ZIP file');
     return;
   }
@@ -2078,8 +3040,9 @@ async function handleZipUpload(event) {
     // Auto-save project to localStorage after loading
     saveProjectToLocalStorage();
     
-    // Save to backend — prompt for project name
-    const projectName = prompt('Enter project name:', file.name.replace(/\.zip$/i, ''));
+    // Use name from the new project modal if available, otherwise prompt
+    const projectName = state._pendingProjectName || prompt('Enter project name:', file.name.replace(/\.zip$/i, ''));
+    state._pendingProjectName = null;
     if (projectName && projectName.trim()) {
       const payload = {
         name: projectName.trim(),
@@ -2940,6 +3903,7 @@ async function openProject(projectId) {
     buildFileTree(state.projectFiles);
 
     closeProjectsDrawer();
+    localStorage.setItem('latexEditor_lastProjectId', project.id);
     compile();
     showSuccessToast(`Opened project: ${project.name}`);
   } catch (err) {
@@ -2974,7 +3938,6 @@ async function saveProjectToBackend() {
 
   try {
     if (state.currentProjectId) {
-      // Update existing
       const res = await fetch(`${API_BASE}/projects/${state.currentProjectId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -2982,7 +3945,6 @@ async function saveProjectToBackend() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } else {
-      // Create new — prompt for name
       const name = state.currentProjectName || prompt('Enter project name:', 'my-project');
       if (!name) return;
       payload.name = name;
@@ -2998,6 +3960,10 @@ async function saveProjectToBackend() {
       const project = await res.json();
       state.currentProjectId = project.id;
       state.currentProjectName = project.name;
+    }
+    // Remember last project for restart recovery
+    if (state.currentProjectId) {
+      localStorage.setItem('latexEditor_lastProjectId', state.currentProjectId);
     }
   } catch (err) {
     console.error('Failed to save project to backend:', err);
@@ -3154,11 +4120,9 @@ async function pushToGithub() {
     return;
   }
 
-  // Save repo for future use
   state.githubRepo = repo;
   localStorage.setItem('latexEditor_githubRepo', repo);
 
-  // Sync current editor content
   if (state.currentFile && !isBinaryContent(state.projectFiles[state.currentFile])) {
     state.projectFiles[state.currentFile] = state.currentLatex;
   }
@@ -3171,7 +4135,6 @@ async function pushToGithub() {
   try {
     showStatus('Pushing to GitHub...', 'info');
 
-    // Check if repo exists, if not create it
     let repoRes = await fetch(`https://api.github.com/repos/${repo}`, { headers });
     if (repoRes.status === 404) {
       const [owner, repoName] = repo.split('/');
@@ -3188,22 +4151,31 @@ async function pushToGithub() {
         body: JSON.stringify({ name: repoName, private: true, auto_init: true }),
       });
       if (!repoRes.ok) throw new Error('Failed to create repository');
-      // Wait for repo to be ready
       await new Promise(r => setTimeout(r, 2000));
     }
 
-    // Get default branch ref
-    const refRes = await fetch(`https://api.github.com/repos/${repo}/git/ref/heads/main`, { headers });
-    let baseSha = null;
-    let baseTreeSha = null;
+    // Resolve default branch name (main, master, etc.)
+    const repoData = await (await fetch(`https://api.github.com/repos/${repo}`, { headers })).json();
+    const defaultBranch = repoData.default_branch || 'main';
 
-    if (refRes.ok) {
-      const refData = await refRes.json();
-      baseSha = refData.object.sha;
-      const commitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits/${baseSha}`, { headers });
-      const commitData = await commitRes.json();
-      baseTreeSha = commitData.tree.sha;
-    }
+    const refRes = await fetch(`https://api.github.com/repos/${repo}/git/ref/heads/${defaultBranch}`, { headers });
+    if (!refRes.ok) throw new Error(`Default branch '${defaultBranch}' not found`);
+
+    const refData = await refRes.json();
+    const baseSha = refData.object.sha;
+    const baseCommitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits/${baseSha}`, { headers });
+    const baseCommitData = await baseCommitRes.json();
+    const baseTreeSha = baseCommitData.tree.sha;
+
+    // Create a unique branch
+    const timestamp = Date.now();
+    const branchName = `latex-editor/update-${timestamp}`;
+    const createBranchRes = await fetch(`https://api.github.com/repos/${repo}/git/refs`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
+    });
+    if (!createBranchRes.ok) throw new Error('Failed to create branch');
 
     // Create blobs for each file
     const tree = [];
@@ -3225,60 +4197,58 @@ async function pushToGithub() {
       if (!blobRes.ok) throw new Error(`Failed to create blob for ${path}`);
       const blob = await blobRes.json();
 
-      tree.push({
-        path,
-        mode: '100644',
-        type: 'blob',
-        sha: blob.sha,
-      });
+      tree.push({ path, mode: '100644', type: 'blob', sha: blob.sha });
     }
-
-    // Create tree
-    const treePayload = { tree };
-    if (baseTreeSha) treePayload.base_tree = baseTreeSha;
 
     const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(treePayload),
+      body: JSON.stringify({ tree, base_tree: baseTreeSha }),
     });
     if (!treeRes.ok) throw new Error('Failed to create tree');
     const treeData = await treeRes.json();
 
-    // Create commit
-    const commitPayload = {
-      message: `Update from LaTeX Editor (${new Date().toISOString()})`,
-      tree: treeData.sha,
-    };
-    if (baseSha) commitPayload.parents = [baseSha];
-
+    const commitMessage = `Update from LaTeX Editor (${new Date().toISOString()})`;
     const commitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(commitPayload),
+      body: JSON.stringify({
+        message: commitMessage,
+        tree: treeData.sha,
+        parents: [baseSha],
+      }),
     });
     if (!commitRes.ok) throw new Error('Failed to create commit');
     const newCommit = await commitRes.json();
 
-    // Update ref
-    const updateRef = baseSha
-      ? fetch(`https://api.github.com/repos/${repo}/git/refs/heads/main`, {
-          method: 'PATCH',
-          headers,
-          body: JSON.stringify({ sha: newCommit.sha }),
-        })
-      : fetch(`https://api.github.com/repos/${repo}/git/refs`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ ref: 'refs/heads/main', sha: newCommit.sha }),
-        });
+    // Point the new branch at the commit
+    const updateBranchRes = await fetch(`https://api.github.com/repos/${repo}/git/refs/heads/${branchName}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ sha: newCommit.sha }),
+    });
+    if (!updateBranchRes.ok) throw new Error('Failed to update branch ref');
 
-    const updateRes = await updateRef;
-    if (!updateRes.ok) throw new Error('Failed to update branch ref');
+    // Open a pull request against the default branch
+    const prRes = await fetch(`https://api.github.com/repos/${repo}/pulls`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        title: commitMessage,
+        head: branchName,
+        base: defaultBranch,
+        body: 'Automated pull request created by [LaTeX Editor](https://github.com/mbianchidev/latex-editor).',
+      }),
+    });
+    if (!prRes.ok) {
+      const prErr = await prRes.json();
+      throw new Error(prErr.message || 'Failed to create pull request');
+    }
+    const prData = await prRes.json();
 
     showGithubConnected(repo);
-    showSuccessToast(`Pushed to github.com/${repo}`);
-    showStatus('Push complete', 'success');
+    showSuccessToast(`PR #${prData.number} opened on github.com/${repo}`);
+    showStatus('Push complete — PR created', 'success');
   } catch (err) {
     console.error('GitHub push failed:', err);
     showErrorToast(`Push failed: ${err.message}`);
@@ -3305,8 +4275,11 @@ async function pullFromGithub() {
   try {
     showStatus('Pulling from GitHub...', 'info');
 
-    // Get the tree recursively
-    const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees/main?recursive=1`, { headers });
+    // Resolve default branch name
+    const repoData = await (await fetch(`https://api.github.com/repos/${repo}`, { headers })).json();
+    const defaultBranch = repoData.default_branch || 'main';
+
+    const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees/${defaultBranch}?recursive=1`, { headers });
     if (!treeRes.ok) throw new Error(`Failed to fetch tree: HTTP ${treeRes.status}`);
     const treeData = await treeRes.json();
 
