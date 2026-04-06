@@ -918,12 +918,13 @@ function validateLatexSyntax(latex) {
     }
   }
 
-  // Detect unknown \command{...} patterns in the document body (warning, not blocking)
+  // Detect unknown \command patterns in the document body
   const docBodyMatch = latex.match(/\\begin\{document\}([\s\S]*?)\\end\{document\}/);
   if (docBodyMatch) {
     const bodyLines = docBodyMatch[1].split('\n');
     const bodyStartLine = latex.substring(0, latex.indexOf('\\begin{document}')).split('\n').length;
-    const unknownCmdPattern = /\\([a-zA-Z]+)\s*\{/g;
+    // Match \command with or without braces
+    const unknownCmdPattern = /\\([a-zA-Z]+)/g;
 
     for (let i = 0; i < bodyLines.length; i++) {
       const bLine = bodyLines[i];
@@ -933,12 +934,14 @@ function validateLatexSyntax(latex) {
       unknownCmdPattern.lastIndex = 0;
       while ((ucMatch = unknownCmdPattern.exec(activeBLine)) !== null) {
         const cmd = ucMatch[1];
+        // Skip \begin{...} and \end{...} — environment names are validated separately
+        if (cmd === 'begin' || cmd === 'end') continue;
         if (!allRecognizedCommands.has(cmd)) {
           errors.push({
             line: bodyStartLine + i,
             column: ucMatch.index + 1,
             command: cmd,
-            message: `Command "\\${cmd}" is not supported in preview (line ${bodyStartLine + i})`,
+            message: `Command "\\${cmd}" is not supported (line ${bodyStartLine + i})`,
             suggestion: '',
           });
         }
