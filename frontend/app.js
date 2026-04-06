@@ -233,14 +233,28 @@ async function init() {
   initializeResizer();
   initAutocomplete();
   
-  // Try to restore last session — localStorage first, then backend
+  // Restore zoom from localStorage
+  const savedZoom = localStorage.getItem('latexEditor_zoom');
+  if (savedZoom) setZoom(parseFloat(savedZoom));
+
+  // Always load projects from the backend (authoritative source)
+  // localStorage is unreliable for multi-file projects
   let restored = false;
-  try {
-    restored = loadFromLocalStorage();
-  } catch (e) { /* ignore */ }
+  const lastProjectId = localStorage.getItem('latexEditor_lastProjectId');
+  if (lastProjectId) {
+    restored = await loadLastProjectFromBackend();
+  }
 
   if (!restored) {
-    restored = await loadLastProjectFromBackend();
+    // Fall back to simple localStorage content (non-project documents)
+    try {
+      const savedContent = localStorage.getItem('latexEditor_content');
+      if (savedContent && savedContent !== DEFAULT_TEMPLATE) {
+        state.currentLatex = savedContent;
+        elements.editor.value = savedContent;
+        restored = true;
+      }
+    } catch (e) { /* ignore */ }
   }
   
   showStatus('Compiling...', 'info');
@@ -941,19 +955,13 @@ function validateLatexSyntax(latex) {
     }
   }
 
-  // Detect unknown \command patterns in the document body
-  const docBodyMatch = latex.match(/\\begin\{document\}([\s\S]*?)\\end\{document\}/);
-  const bodyContent = docBodyMatch ? docBodyMatch[1] : latex;
-  const bodyStartLine = docBodyMatch
-    ? latex.substring(0, latex.indexOf('\\begin{document}')).split('\n').length
-    : 1;
-
+  // Detect unknown \command patterns in the entire document
   {
-    const bodyLines = bodyContent.split('\n');
+    const allLines = latex.split('\n');
     const unknownCmdPattern = /\\([a-zA-Z]+)/g;
 
-    for (let i = 0; i < bodyLines.length; i++) {
-      const bLine = bodyLines[i];
+    for (let i = 0; i < allLines.length; i++) {
+      const bLine = allLines[i];
       if (/^\s*%/.test(bLine)) continue;
       const activeBLine = bLine.replace(/([^\\])%.*$/, '$1');
       let ucMatch;
@@ -963,10 +971,10 @@ function validateLatexSyntax(latex) {
         if (cmd === 'begin' || cmd === 'end') continue;
         if (!allRecognizedCommands.has(cmd)) {
           errors.push({
-            line: bodyStartLine + i,
+            line: i + 1,
             column: ucMatch.index + 1,
             command: cmd,
-            message: `Command "\\${cmd}" is not supported (line ${bodyStartLine + i})`,
+            message: `Command "\\${cmd}" is not supported (line ${i + 1})`,
             suggestion: '',
           });
         }
