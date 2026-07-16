@@ -283,12 +283,15 @@
         </div>
     </aside>
 
-    <!-- GitHub Settings Modal -->
+    <!-- GitHub Folder Sync Modal -->
     <div class="modal-overlay" id="githubModalOverlay">
-        <div class="modal" id="githubModal">
+        <div class="modal github-sync-modal" id="githubModal">
             <div class="modal-header">
-                <h3>GitHub Connection</h3>
-                <button class="icon-btn" id="closeGithubModal">
+                <div class="modal-title-group">
+                    <span class="modal-eyebrow">Versioned source</span>
+                    <h3>GitHub folder sync</h3>
+                </div>
+                <button class="icon-btn" id="closeGithubModal" title="Close">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="18" y1="6" x2="6" y2="18"/>
                         <line x1="6" y1="6" x2="18" y2="18"/>
@@ -299,19 +302,51 @@
                 <div class="form-group">
                     <label for="githubToken">Personal Access Token (PAT)</label>
                     <input type="password" id="githubToken" class="form-input" placeholder="ghp_xxxxxxxxxxxx" autocomplete="off">
-                    <small class="form-hint">Generate a fine-grained PAT at <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener">github.com/settings/tokens</a> with <code>Contents</code> (read &amp; write) and <code>Pull requests</code> (read &amp; write) permissions.</small>
+                    <small class="form-hint">Use a fine-grained token scoped to the target repository with <code>Contents</code> read and write access. The token stays in this browser tab.</small>
                 </div>
                 <div id="githubStatus" class="github-status"></div>
                 <div class="form-group" id="githubRepoGroup" style="display:none;">
-                    <label for="githubRepo">Repository (owner/repo)</label>
-                    <input type="text" id="githubRepo" class="form-input" placeholder="username/my-latex-project">
+                    <div class="github-source-grid">
+                        <div class="github-source-wide">
+                            <label for="githubRepo">Repository</label>
+                            <input type="text" id="githubRepo" class="form-input" placeholder="mbianchidev/my-curriculum" autocomplete="off">
+                        </div>
+                        <div>
+                            <label for="githubPath">Folder</label>
+                            <input type="text" id="githubPath" class="form-input" placeholder="resume" autocomplete="off">
+                        </div>
+                        <div>
+                            <label for="githubBranch">Branch</label>
+                            <input type="text" id="githubBranch" class="form-input" placeholder="default branch" autocomplete="off">
+                        </div>
+                    </div>
+                    <small class="form-hint">Only this folder is imported and committed. Leave Folder empty to link the repository root.</small>
+                </div>
+                <div class="github-linked-source" id="githubLinkedSource" style="display:none;">
+                    <div class="github-linked-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="6" cy="5" r="2"/>
+                            <circle cx="18" cy="6" r="2"/>
+                            <circle cx="6" cy="19" r="2"/>
+                            <path d="M6 7v10"/>
+                            <path d="M8 7.5c4.5 0 3.5 5 8 5"/>
+                            <path d="M16 10.5l2 2-2 2"/>
+                        </svg>
+                    </div>
+                    <div class="github-linked-copy">
+                        <span>Linked project source</span>
+                        <code id="githubLinkedSourcePath"></code>
+                    </div>
+                    <code class="github-linked-sha" id="githubLinkedSourceSha"></code>
                 </div>
             </div>
-            <div class="modal-footer">
+            <div class="modal-footer github-modal-footer">
                 <button class="btn btn-secondary" id="githubDisconnect" style="display:none;">Disconnect</button>
-                <button class="btn btn-secondary" id="githubPull" style="display:none;">Pull from Repo</button>
+                <span class="modal-footer-spacer"></span>
+                <button class="btn btn-secondary" id="githubPull" style="display:none;">Pull latest</button>
+                <button class="btn btn-secondary" id="githubImport" style="display:none;">Import folder</button>
                 <button class="btn btn-primary" id="githubSave">Connect</button>
-                <button class="btn btn-primary" id="githubPush" style="display:none;">Push &amp; Open PR</button>
+                <button class="btn btn-primary" id="githubCommit" style="display:none;">Commit changes</button>
             </div>
         </div>
     </div>
@@ -356,6 +391,12 @@
                                 <line x1="12" y1="3" x2="12" y2="15"/>
                             </svg>
                             Import ZIP
+                        </button>
+                        <button class="btn btn-secondary btn-full" id="newProjectGithubBtn">
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                            Import GitHub Folder
                         </button>
                     </div>
                 </div>

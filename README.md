@@ -14,7 +14,7 @@ A free, open source LaTeX editor with real-time preview capabilities. Think Over
 - **CV/Resume Support**: Full rendering of CV-class documents (russell.cls) with sections, entries, skills tables
 - **Project Management**: Save, open, rename, and delete projects from a sidebar drawer
 - **SQLite Persistence**: Projects stored in a SQLite database on the backend (survives container restarts)
-- **GitHub Integration**: Push/pull projects to/from GitHub repositories with PAT authentication
+- **GitHub Folder Sync**: Import a repository folder, pull updates, and commit edits back
 - **Syntax Highlighting**: Full LaTeX syntax highlighting for easier editing
 - **File Management**: Add, rename, and delete files directly in the browser
 - **Free & Open Source**: No paywalls, no subscriptions, no restrictions
@@ -38,7 +38,8 @@ git clone https://github.com/mbianchidev/latex-editor.git
 cd latex-editor
 
 # Start with Docker Compose
-docker compose up --build -d
+docker compose build --no-cache
+docker compose up -d
 
 # Open http://localhost in your browser
 ```
@@ -91,11 +92,20 @@ python3 -m http.server 8080
 
 ### GitHub Integration
 
-1. Click **Projects** → **GitHub Settings** in the drawer footer
-2. Enter a GitHub Personal Access Token (PAT) with `repo` scope
-3. Enter a repository name (`owner/repo`)
-4. **Push**: Saves all project files as a commit to the repo (creates it if needed)
-5. **Pull**: Fetches files from a GitHub repo and loads them as a new project
+1. Click **New** → **Import GitHub Folder**, or open **Projects** → **GitHub Settings**
+2. Enter a fine-grained GitHub Personal Access Token with repository `Contents`
+   read and write access. The token is kept in the current browser tab only.
+3. Enter the repository (`owner/repo`), folder (`resume`), and optional branch.
+   Leaving the branch blank uses the repository default branch.
+4. Click **Import folder**. The folder becomes a local project and keeps its GitHub
+   source link.
+5. Use **Pull latest** to replace the local project with the current linked folder.
+6. Use **Commit changes** to create a commit directly on the linked branch. If the
+   branch changed since the last import or pull, the editor stops and asks you to pull
+   first instead of overwriting remote work.
+
+Only files inside the linked folder are managed. Files elsewhere in the repository
+remain unchanged. Protected branches require a writable branch.
 
 ### Auto-Compile Toggle
 
@@ -179,11 +189,11 @@ latex-editor/
 ├── frontend/           # Main application
 │   ├── index.html      # HTML structure + project drawer + GitHub modal
 │   ├── styles.css      # Design system + drawer/modal styles
-│   ├── app.js          # Application logic + project management + GitHub integration
+│   ├── app.js          # Application logic + project management + GitHub folder sync
 │   └── nginx.conf      # Web server config + CSP headers
 ├── backend/            # Flask API + SQLite project storage
 │   ├── app.py          # API endpoints (health, documents, projects)
-│   ├── test_app.py     # 43 tests (health, documents, projects CRUD)
+│   ├── test_app.py     # 54 tests (health, documents, projects, GitHub metadata)
 │   ├── Dockerfile      # Backend container with /data volume
 │   └── requirements.txt
 ├── docker-compose.yml  # Container orchestration with backend-data volume

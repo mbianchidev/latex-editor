@@ -1331,6 +1331,26 @@ button {
   color: var(--text-tertiary, #A39D8F);
   margin-top: 0.25rem;
 }
+.project-card-source {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  margin-top: 0.45rem;
+  color: var(--color-accent-dark, #4A6E6B);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+}
+.project-card-source svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+.project-card-source span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .project-card-actions .icon-btn {
   width: 24px;
   height: 24px;
@@ -1366,6 +1386,9 @@ button {
   max-width: 480px;
   overflow: hidden;
 }
+.github-sync-modal {
+  max-width: 620px;
+}
 .modal-header {
   display: flex;
   align-items: center;
@@ -1373,6 +1396,20 @@ button {
   padding: 1rem 1.25rem;
   border-bottom: 1px solid var(--border-primary, #D4CEC0);
   background: var(--bg-secondary, #F5F2EB);
+}
+.modal-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.modal-eyebrow {
+  color: var(--color-accent-dark, #4A6E6B);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  text-transform: uppercase;
 }
 .modal-header h3 {
   margin: 0;
@@ -1441,6 +1478,78 @@ button {
   font-size: 0.75rem;
 }
 
+.github-source-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.75rem;
+}
+.github-source-wide {
+  grid-column: 1 / -1;
+}
+.github-linked-source {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem;
+  border: 1px solid var(--color-accent, #6B9B97);
+  border-left-width: 4px;
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(107, 155, 151, 0.13), rgba(107, 155, 151, 0.03)),
+    #FFFFFF;
+  color: var(--color-accent-deep, #2F4745);
+}
+.github-linked-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-accent-deep, #2F4745);
+  color: #FFFFFF;
+}
+.github-linked-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.github-linked-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+.github-linked-copy span {
+  color: var(--text-tertiary, #A39D8F);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.github-linked-copy code {
+  overflow: hidden;
+  color: var(--color-accent-deep, #2F4745);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.github-linked-sha {
+  flex: 0 0 auto;
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(47, 71, 69, 0.1);
+  color: var(--color-accent-deep, #2F4745);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+}
+.github-modal-footer {
+  flex-wrap: wrap;
+}
+.modal-footer-spacer {
+  flex: 1;
+}
+
 .github-status {
   padding: 0.5rem 0.75rem;
   border-radius: 6px;
@@ -1459,6 +1568,24 @@ button {
   background: #fde8e8;
   color: #c62828;
   border: 1px solid #f5c6c6;
+}
+
+@media (max-width: 600px) {
+  .github-source-grid {
+    grid-template-columns: 1fr;
+  }
+  .github-source-wide {
+    grid-column: auto;
+  }
+  .github-linked-sha {
+    display: none;
+  }
+  .github-modal-footer .modal-footer-spacer {
+    display: none;
+  }
+  .github-modal-footer .btn {
+    flex: 1 1 calc(50% - 0.5rem);
+  }
 }
 
 /* Autocomplete dropdown */
