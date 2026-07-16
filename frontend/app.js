@@ -132,9 +132,17 @@ const state = {
   // Backend project tracking
   currentProjectId: null,
   currentProjectName: null,
+  projectFilesIncomplete: false,
+  projectSwitchInProgress: false,
   // GitHub
   githubToken: null,
+  githubLogin: null,
   githubRepo: null,
+  githubPath: '',
+  githubBranch: null,
+  githubSha: null,
+  githubManifest: {},
+  githubSyncInProgress: false,
 };
 
 // ============================================
@@ -191,17 +199,24 @@ const elements = {
   newProjectBlankBtn: document.getElementById('newProjectBlankBtn'),
   newProjectMultiBtn: document.getElementById('newProjectMultiBtn'),
   newProjectZipBtn: document.getElementById('newProjectZipBtn'),
+  newProjectGithubBtn: document.getElementById('newProjectGithubBtn'),
   // GitHub modal
   githubModalOverlay: document.getElementById('githubModalOverlay'),
   closeGithubModal: document.getElementById('closeGithubModal'),
   githubToken: document.getElementById('githubToken'),
   githubRepo: document.getElementById('githubRepo'),
+  githubPath: document.getElementById('githubPath'),
+  githubBranch: document.getElementById('githubBranch'),
   githubRepoGroup: document.getElementById('githubRepoGroup'),
   githubStatus: document.getElementById('githubStatus'),
+  githubLinkedSource: document.getElementById('githubLinkedSource'),
+  githubLinkedSourcePath: document.getElementById('githubLinkedSourcePath'),
+  githubLinkedSourceSha: document.getElementById('githubLinkedSourceSha'),
   githubSave: document.getElementById('githubSave'),
   githubDisconnect: document.getElementById('githubDisconnect'),
-  githubPush: document.getElementById('githubPush'),
+  githubImport: document.getElementById('githubImport'),
   githubPull: document.getElementById('githubPull'),
+  githubCommit: document.getElementById('githubCommit'),
   // Generic prompt/confirm modal
   genericModalOverlay: document.getElementById('genericModalOverlay'),
   genericModalTitle: document.getElementById('genericModalTitle'),
@@ -359,8 +374,8 @@ async function init() {
     restored = await loadLastProjectFromBackend();
   }
 
-  // If backend failed but we have a project in localStorage, use it
-  if (!restored && lastProjectId) {
+  // Recover local project state when no backend project was restored.
+  if (!restored) {
     restored = loadProjectFromLocalStorage();
   }
 
@@ -675,6 +690,12 @@ function initializeEventListeners() {
   if (elements.newProjectZipBtn) {
     elements.newProjectZipBtn.addEventListener('click', () => handleNewProjectCreate('zip'));
   }
+  if (elements.newProjectGithubBtn) {
+    elements.newProjectGithubBtn.addEventListener('click', () => {
+      closeNewProjectModal();
+      openGithubModal();
+    });
+  }
 
   // New project from sidebar
   if (elements.drawerNewProjectBtn) {
@@ -742,10 +763,13 @@ function initializeEventListeners() {
 
   // GitHub modal
   if (elements.drawerGithubBtn) {
-    elements.drawerGithubBtn.addEventListener('click', openGithubModal);
+    elements.drawerGithubBtn.addEventListener('click', () => {
+      closeProjectsDrawer();
+      openGithubModal();
+    });
   }
   if (elements.closeGithubModal) {
-    elements.closeGithubModal.addEventListener('click', closeGithubModal);
+    elements.closeGithubModal.addEventListener('click', () => closeGithubModal());
   }
   if (elements.githubModalOverlay) {
     elements.githubModalOverlay.addEventListener('click', (e) => {
@@ -758,11 +782,14 @@ function initializeEventListeners() {
   if (elements.githubDisconnect) {
     elements.githubDisconnect.addEventListener('click', disconnectGithub);
   }
-  if (elements.githubPush) {
-    elements.githubPush.addEventListener('click', pushToGithub);
+  if (elements.githubImport) {
+    elements.githubImport.addEventListener('click', importFromGithub);
   }
   if (elements.githubPull) {
     elements.githubPull.addEventListener('click', pullFromGithub);
+  }
+  if (elements.githubCommit) {
+    elements.githubCommit.addEventListener('click', commitToGithub);
   }
 
   // Save to localStorage on unload
@@ -774,6 +801,11 @@ function initializeEventListeners() {
 // ============================================
 
 function handleEditorChange(e) {
+  if (state.githubSyncInProgress || state.projectSwitchInProgress) {
+    e.target.value = state.currentLatex;
+    showErrorToast('Wait for the current project operation to finish');
+    return;
+  }
   state.currentLatex = e.target.value;
   
   // Update project file if in project mode
@@ -2231,12 +2263,36 @@ function downloadTeX() {
 // NEW PROJECT (unified — single files are also projects)
 // ============================================
 
+function setProjectSwitchInProgress(inProgress) {
+  state.projectSwitchInProgress = inProgress;
+  elements.fileTree.style.pointerEvents = inProgress ? 'none' : '';
+  if (elements.newDocBtn) {
+    elements.newDocBtn.disabled = inProgress;
+  }
+
+  if (inProgress) {
+    elements.editor.readOnly = true;
+    return;
+  }
+
+  const currentContent = state.currentFile
+    ? state.projectFiles[state.currentFile]
+    : null;
+  elements.editor.readOnly = isBinaryContent(currentContent);
+}
+
 /**
  * Create a new blank single-file project (just main.tex)
  */
-function createBlankProject(projectName) {
-  if (state.projectMode && state.currentProjectId) {
-    saveProjectToBackend();
+async function createBlankProject(projectName) {
+  clearTimeout(_backendSaveTimer);
+  if (state.projectFilesIncomplete) {
+    throw new Error(
+      'Export or reopen the incomplete recovery copy before creating another project.'
+    );
+  }
+  if (state.projectMode) {
+    await saveProjectToBackend({ throwOnError: true });
   }
 
   const projectTitle = escapeLatex(
@@ -2268,6 +2324,11 @@ Start writing your document here.
 \\end{document}
 `;
 
+  state.currentProjectId = null;
+  state.currentProjectName = projectName;
+  state.projectFilesIncomplete = false;
+  localStorage.removeItem('latexEditor_lastProjectId');
+  clearProjectGithubLink();
   state.projectFiles = { 'main.tex': mainContent };
   state.mainFile = 'main.tex';
   state.currentFile = 'main.tex';
@@ -2284,8 +2345,7 @@ Start writing your document here.
   elements.downloadZipBtn.style.display = 'inline-block';
 
   saveProjectToLocalStorage();
-  state.currentProjectName = projectName;
-  saveProjectToBackend();
+  await saveProjectToBackend({ throwOnError: true });
 
   showSuccessToast(`Created project: ${projectName}`);
   compile(true);
@@ -2294,9 +2354,15 @@ Start writing your document here.
 /**
  * Create a new multi-file project with sections/ structure
  */
-function createMultiFileProject(projectName) {
-  if (state.projectMode && state.currentProjectId) {
-    saveProjectToBackend();
+async function createMultiFileProject(projectName) {
+  clearTimeout(_backendSaveTimer);
+  if (state.projectFilesIncomplete) {
+    throw new Error(
+      'Export or reopen the incomplete recovery copy before creating another project.'
+    );
+  }
+  if (state.projectMode) {
+    await saveProjectToBackend({ throwOnError: true });
   }
 
   const projectTitle = escapeLatex(
@@ -2339,6 +2405,11 @@ This is your new LaTeX project. Edit this file or create new sections.
 \\end{itemize}
 `;
 
+  state.currentProjectId = null;
+  state.currentProjectName = projectName;
+  state.projectFilesIncomplete = false;
+  localStorage.removeItem('latexEditor_lastProjectId');
+  clearProjectGithubLink();
   state.projectFiles = {
     'main.tex': mainContent,
     'sections/introduction.tex': introContent,
@@ -2359,8 +2430,7 @@ This is your new LaTeX project. Edit this file or create new sections.
   elements.downloadZipBtn.style.display = 'inline-block';
 
   saveProjectToLocalStorage();
-  state.currentProjectName = projectName;
-  saveProjectToBackend();
+  await saveProjectToBackend({ throwOnError: true });
 
   showSuccessToast(`Created project: ${projectName}`);
   compile(true);
@@ -2371,6 +2441,16 @@ This is your new LaTeX project. Edit this file or create new sections.
  * Replaces the old separate newDocument() / newProject() flows.
  */
 async function openNewProjectModal() {
+  if (state.githubSyncInProgress) {
+    showErrorToast('Wait for the GitHub sync operation to finish');
+    return;
+  }
+  if (state.projectFilesIncomplete) {
+    showErrorToast(
+      'Export or reopen the incomplete recovery copy before creating another project.'
+    );
+    return;
+  }
   if (state.projectMode && Object.keys(state.projectFiles).length > 0 &&
       state.currentLatex !== DEFAULT_TEMPLATE &&
       !(await showConfirmModal('New Project', 'Create new project? You will switch away from the current project.'))) {
@@ -2385,7 +2465,7 @@ function closeNewProjectModal() {
   elements.newProjectModalOverlay.style.display = 'none';
 }
 
-function handleNewProjectCreate(type) {
+async function handleNewProjectCreate(type) {
   const name = elements.newProjectName.value.trim();
   if (!name) {
     showErrorToast('Please enter a project name');
@@ -2396,14 +2476,28 @@ function handleNewProjectCreate(type) {
   closeNewProjectModal();
   closeProjectsDrawer();
 
-  if (type === 'blank') {
-    createBlankProject(name);
-  } else if (type === 'multifile') {
-    createMultiFileProject(name);
-  } else if (type === 'zip') {
-    // Store the name for the zip upload handler, then trigger file picker
-    state._pendingProjectName = name;
-    elements.zipFileInput.click();
+  const switchesProject = type === 'blank' || type === 'multifile';
+  if (switchesProject) {
+    setProjectSwitchInProgress(true);
+  }
+
+  try {
+    if (type === 'blank') {
+      await createBlankProject(name);
+    } else if (type === 'multifile') {
+      await createMultiFileProject(name);
+    } else if (type === 'zip') {
+      // Store the name for the zip upload handler, then trigger file picker
+      state._pendingProjectName = name;
+      elements.zipFileInput.click();
+    }
+  } catch (error) {
+    console.error('Failed to create project:', error);
+    showErrorToast(`Project creation failed: ${error.message}`);
+  } finally {
+    if (switchesProject) {
+      setProjectSwitchInProgress(false);
+    }
   }
 }
 
@@ -2450,7 +2544,65 @@ function decodeFromStorage(str) {
  * Check if content represents a binary file
  */
 function isBinaryContent(content) {
-  return content && typeof content === 'object' && content.isBinary;
+  return Boolean(
+    content
+    && typeof content === 'object'
+    && (content.isBinary === true || content.type === 'binary')
+  );
+}
+
+function clearProjectGithubLink() {
+  state.githubRepo = null;
+  state.githubPath = '';
+  state.githubBranch = null;
+  state.githubSha = null;
+  state.githubManifest = {};
+}
+
+function setProjectGithubLink(github) {
+  if (!github) {
+    clearProjectGithubLink();
+    return;
+  }
+
+  state.githubRepo = github.repo;
+  state.githubPath = github.path || '';
+  state.githubBranch = github.branch;
+  state.githubSha = github.sha;
+  state.githubManifest = { ...(github.manifest || {}) };
+}
+
+function getCurrentGithubLink() {
+  if (!state.githubRepo || !state.githubBranch || !state.githubSha) {
+    return null;
+  }
+  return {
+    repo: state.githubRepo,
+    path: state.githubPath || '',
+    branch: state.githubBranch,
+    sha: state.githubSha,
+    manifest: { ...state.githubManifest },
+  };
+}
+
+function serializeProjectFiles(files = state.projectFiles) {
+  const serialized = {};
+  for (const [path, content] of Object.entries(files)) {
+    serialized[path] = isBinaryContent(content)
+      ? { isBinary: true, content: content.content || '' }
+      : content;
+  }
+  return serialized;
+}
+
+function cloneProjectFiles(files = state.projectFiles) {
+  const cloned = {};
+  for (const [path, content] of Object.entries(files)) {
+    cloned[path] = isBinaryContent(content)
+      ? { isBinary: true, content: content.content || '' }
+      : content;
+  }
+  return cloned;
 }
 
 /**
@@ -2575,7 +2727,11 @@ function saveProjectToLocalStorage() {
     const projectData = {
       files: state.projectFiles,
       mainFile: state.mainFile,
-      currentFile: state.currentFile
+      currentFile: state.currentFile,
+      projectId: state.currentProjectId,
+      projectName: state.currentProjectName,
+      github: getCurrentGithubLink(),
+      binaryFilesStripped: state.projectFilesIncomplete,
     };
     
     // Try saving the full project first
@@ -2601,7 +2757,10 @@ function saveProjectToLocalStorage() {
       files: textOnlyFiles,
       mainFile: state.mainFile,
       currentFile: state.currentFile,
-      binaryFilesStripped: true
+      projectId: state.currentProjectId,
+      projectName: state.currentProjectName,
+      github: getCurrentGithubLink(),
+      binaryFilesStripped: true,
     };
 
     encoded = encodeForStorage(JSON.stringify(lightData));
@@ -2703,13 +2862,15 @@ async function loadLastProjectFromBackend() {
 /**
  * Restore a project from API response data into the editor state.
  */
-function restoreProject(project) {
+function restoreProject(project, options = {}) {
   state.projectFiles = project.files || {};
   state.mainFile = project.main_file;
   state.currentFile = project.main_file;
   state.projectMode = true;
   state.currentProjectId = project.id;
   state.currentProjectName = project.name;
+  state.projectFilesIncomplete = false;
+  setProjectGithubLink(project.github);
 
   const fileContent = state.projectFiles[state.mainFile];
   if (isBinaryContent(fileContent)) {
@@ -2732,7 +2893,9 @@ function restoreProject(project) {
   // Save project ID for next restart
   localStorage.setItem('latexEditor_lastProjectId', project.id);
 
-  showSuccessToast(`Restored project: ${project.name}`);
+  if (options.showToast !== false) {
+    showSuccessToast(`Restored project: ${project.name}`);
+  }
 }
 
 /**
@@ -2755,6 +2918,10 @@ function loadProjectFromLocalStorage() {
     state.mainFile = projectData.mainFile;
     state.currentFile = projectData.currentFile || projectData.mainFile;
     state.projectMode = true;
+    state.currentProjectId = projectData.projectId || null;
+    state.currentProjectName = projectData.projectName || null;
+    state.projectFilesIncomplete = Boolean(projectData.binaryFilesStripped);
+    setProjectGithubLink(projectData.github);
     
     // Load current file content
     const fileContent = state.projectFiles[state.currentFile];
@@ -2997,6 +3164,8 @@ function cleanCurrentProject() {
     }
     
     buildFileTree(state.projectFiles);
+    saveProjectToLocalStorage();
+    scheduleBackendSave();
     showSuccessToast(`Cleaned ${removedCount} macOS/system files`);
   } else {
     showSuccessToast('Project is already clean!');
@@ -3004,21 +3173,43 @@ function cleanCurrentProject() {
 }
 
 async function handleZipUpload(event) {
+  if (state.githubSyncInProgress) {
+    event.target.value = '';
+    showErrorToast('Wait for the GitHub sync operation to finish');
+    return;
+  }
   const file = event.target.files[0];
   if (!file) {
     state._pendingProjectName = null;
     return;
   }
-  
-  // Save current project to backend before loading a new one
-  if (state.projectMode && state.currentProjectId) {
-    await saveProjectToBackend();
-  }
-  
+
   if (!file.name.endsWith('.zip')) {
     state._pendingProjectName = null;
     showErrorToast('Please upload a ZIP file');
     return;
+  }
+  if (state.projectFilesIncomplete) {
+    state._pendingProjectName = null;
+    event.target.value = '';
+    showErrorToast(
+      'Export or reopen the incomplete recovery copy before importing a ZIP.'
+    );
+    return;
+  }
+  setProjectSwitchInProgress(true);
+
+  // Save current project to backend before loading a new one
+  clearTimeout(_backendSaveTimer);
+  if (state.projectMode && !state.projectFilesIncomplete) {
+    try {
+      await saveProjectToBackend({ throwOnError: true });
+    } catch (error) {
+      showErrorToast(`Could not save the current project: ${error.message}`);
+      event.target.value = '';
+      setProjectSwitchInProgress(false);
+      return;
+    }
   }
   
   try {
@@ -3130,6 +3321,11 @@ async function handleZipUpload(event) {
     }
     
     // Update state
+    state.currentProjectId = null;
+    state.currentProjectName = null;
+    state.projectFilesIncomplete = false;
+    localStorage.removeItem('latexEditor_lastProjectId');
+    clearProjectGithubLink();
     state.projectFiles = files;
     state.mainFile = mainTexFile;
     state.currentFile = mainTexFile;
@@ -3157,18 +3353,13 @@ async function handleZipUpload(event) {
     const projectName = state._pendingProjectName || (await showPromptModal('Project Name', 'Enter project name:', file.name.replace(/\.zip$/i, '')));
     state._pendingProjectName = null;
     if (projectName && projectName.trim()) {
+      state.currentProjectName = projectName.trim();
+      saveProjectToLocalStorage();
       const payload = {
-        name: projectName.trim(),
-        files: {},
+        name: state.currentProjectName,
+        files: serializeProjectFiles(files),
         main_file: mainTexFile,
       };
-      for (const [path, content] of Object.entries(files)) {
-        if (isBinaryContent(content)) {
-          payload.files[path] = { type: 'binary', content: content.content || content };
-        } else {
-          payload.files[path] = content;
-        }
-      }
       try {
         const res = await fetch(`${API_BASE}/projects`, {
           method: 'POST',
@@ -3179,6 +3370,10 @@ async function handleZipUpload(event) {
           const project = await res.json();
           state.currentProjectId = project.id;
           state.currentProjectName = project.name;
+          state.projectFilesIncomplete = false;
+          setProjectGithubLink(project.github);
+          localStorage.setItem('latexEditor_lastProjectId', project.id);
+          saveProjectToLocalStorage();
         } else {
           const err = await res.json();
           console.warn('Project save to backend failed:', err.error);
@@ -3197,6 +3392,7 @@ async function handleZipUpload(event) {
     console.error('ZIP extraction error:', error);
     showErrorToast('Failed to extract ZIP file: ' + error.message);
   } finally {
+    setProjectSwitchInProgress(false);
     hideLoading();
     // Reset file input
     event.target.value = '';
@@ -3439,7 +3635,10 @@ async function downloadProjectZip() {
     showLoading('Creating ZIP file...');
     
     // Save current file
-    if (state.currentFile) {
+    if (
+      state.currentFile
+      && !isBinaryContent(state.projectFiles[state.currentFile])
+    ) {
       state.projectFiles[state.currentFile] = state.currentLatex;
     }
     
@@ -3564,6 +3763,10 @@ function resolveIncludes(content, currentPath, visitedFiles = new Set()) {
 
 let activeContextMenu = null;
 
+function hasProjectFile(path) {
+  return Object.prototype.hasOwnProperty.call(state.projectFiles, path);
+}
+
 /**
  * Show context menu for file/folder management
  */
@@ -3654,7 +3857,7 @@ async function addNewFile(parentPath) {
   
   const newPath = parentPath ? `${parentPath}/${safeName}` : safeName;
   
-  if (state.projectFiles[newPath]) {
+  if (hasProjectFile(newPath)) {
     showErrorToast('File already exists');
     return;
   }
@@ -3675,6 +3878,7 @@ async function addNewFile(parentPath) {
   
   // Auto-save project
   saveProjectToLocalStorage();
+  scheduleBackendSave();
   
   showSuccessToast(`Created ${filename}`);
 }
@@ -3694,7 +3898,7 @@ async function addNewFolder(parentPath) {
   
   const placeholderPath = parentPath ? `${parentPath}/${safeName}/.gitkeep` : `${safeName}/.gitkeep`;
   
-  if (state.projectFiles[placeholderPath]) {
+  if (hasProjectFile(placeholderPath)) {
     showErrorToast('Folder already exists');
     return;
   }
@@ -3706,6 +3910,7 @@ async function addNewFolder(parentPath) {
   
   // Auto-save project
   saveProjectToLocalStorage();
+  scheduleBackendSave();
   
   showSuccessToast(`Created folder ${safeName}`);
 }
@@ -3716,19 +3921,20 @@ async function addNewFolder(parentPath) {
 async function renameFile(oldPath) {
   const oldName = oldPath.split('/').pop();
   const newName = await showPromptModal('Rename File', 'New file name:', oldName);
-  if (!newName || newName === oldName) return;
+  if (!newName) return;
 
   const safeName = sanitizeFilename(newName);
   if (!safeName || safeName.includes('/')) {
     showErrorToast('Invalid filename. Avoid special characters, ".." and slashes.');
     return;
   }
+  if (safeName === oldName) return;
   
   const pathParts = oldPath.split('/');
   pathParts[pathParts.length - 1] = safeName;
   const newPath = pathParts.join('/');
   
-  if (state.projectFiles[newPath]) {
+  if (hasProjectFile(newPath)) {
     showErrorToast('A file with this name already exists');
     return;
   }
@@ -3753,6 +3959,7 @@ async function renameFile(oldPath) {
   
   // Auto-save project
   saveProjectToLocalStorage();
+  scheduleBackendSave();
   
   showSuccessToast(`Renamed to ${safeName}`);
 }
@@ -3763,13 +3970,14 @@ async function renameFile(oldPath) {
 async function renameFolder(oldPath) {
   const oldName = oldPath.split('/').pop();
   const newName = await showPromptModal('Rename Folder', 'New folder name:', oldName);
-  if (!newName || newName === oldName) return;
+  if (!newName) return;
 
   const safeName = sanitizeFilename(newName);
   if (!safeName || safeName.includes('/')) {
     showErrorToast('Invalid folder name. Avoid special characters, ".." and slashes.');
     return;
   }
+  if (safeName === oldName) return;
   
   const pathParts = oldPath.split('/');
   pathParts[pathParts.length - 1] = safeName;
@@ -3779,11 +3987,31 @@ async function renameFolder(oldPath) {
   const filesToMove = Object.keys(state.projectFiles).filter(p => 
     p === oldPath || p.startsWith(oldPath + '/')
   );
-  
-  for (const filePath of filesToMove) {
-    const newFilePath = filePath.replace(oldPath, newPath);
-    state.projectFiles[newFilePath] = state.projectFiles[filePath];
-    delete state.projectFiles[filePath];
+
+  const sourcePaths = new Set(filesToMove);
+  const moves = filesToMove.map(filePath => ({
+    oldPath: filePath,
+    newPath: newPath + filePath.slice(oldPath.length),
+  }));
+  const collision = moves.find(
+    move => hasProjectFile(move.newPath) && !sourcePaths.has(move.newPath)
+  );
+  if (collision) {
+    showErrorToast(`Cannot rename folder: ${collision.newPath} already exists`);
+    return;
+  }
+
+  const movedFiles = {};
+  for (const move of moves) {
+    movedFiles[move.newPath] = state.projectFiles[move.oldPath];
+  }
+  for (const move of moves) {
+    delete state.projectFiles[move.oldPath];
+  }
+  Object.assign(state.projectFiles, movedFiles);
+
+  for (const move of moves) {
+    const { oldPath: filePath, newPath: newFilePath } = move;
     
     // Update references
     if (state.currentFile === filePath) {
@@ -3799,6 +4027,7 @@ async function renameFolder(oldPath) {
   
   // Auto-save project
   saveProjectToLocalStorage();
+  scheduleBackendSave();
   
   showSuccessToast(`Renamed folder to ${safeName}`);
 }
@@ -3830,6 +4059,7 @@ async function deleteFile(path) {
   
   // Auto-save project
   saveProjectToLocalStorage();
+  scheduleBackendSave();
   
   showSuccessToast(`Deleted ${filename}`);
 }
@@ -3868,6 +4098,7 @@ async function deleteFolder(path) {
   
   // Auto-save project
   saveProjectToLocalStorage();
+  scheduleBackendSave();
   
   showSuccessToast(`Deleted folder ${foldername}`);
 }
@@ -3884,6 +4115,7 @@ function setAsMainFile(path) {
   
   // Auto-save project
   saveProjectToLocalStorage();
+  scheduleBackendSave();
 }
 
 function hideToast(type) {
@@ -3957,7 +4189,7 @@ function renderProjectsList(projects) {
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
         </svg>
         <p>No projects yet</p>
-        <p class="drawer-empty-hint">Import a ZIP or create a new project to get started.</p>
+        <p class="drawer-empty-hint">Import a GitHub folder, upload a ZIP, or create a project.</p>
       </div>`;
     return;
   }
@@ -3965,6 +4197,16 @@ function renderProjectsList(projects) {
   elements.projectsList.innerHTML = projects.map(p => {
     const updated = new Date(p.updated_at).toLocaleDateString();
     const isActive = state.currentProjectId === p.id;
+    const githubSource = p.github
+      ? `<div class="project-card-source">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="6" cy="5" r="2"/><circle cx="18" cy="6" r="2"/>
+            <circle cx="6" cy="19" r="2"/><path d="M6 7v10"/>
+            <path d="M8 7.5c4.5 0 3.5 5 8 5"/>
+          </svg>
+          <span>${escapeHtml(p.github.repo)}${p.github.path ? `/${escapeHtml(p.github.path)}` : ''} · ${escapeHtml(p.github.branch)}</span>
+        </div>`
+      : '';
     return `<div class="project-card${isActive ? ' active' : ''}" data-id="${escapeHtml(p.id)}">
       <div class="project-card-header">
         <span class="project-card-name">${escapeHtml(p.name)}</span>
@@ -3983,6 +4225,7 @@ function renderProjectsList(projects) {
         </div>
       </div>
       <div class="project-card-meta">${p.file_count || 0} files · Updated ${updated}</div>
+      ${githubSource}
     </div>`;
   }).join('');
 
@@ -4007,74 +4250,148 @@ function renderProjectsList(projects) {
   });
 }
 
+let _openProjectRequestId = 0;
+
 async function openProject(projectId) {
+  if (state.githubSyncInProgress) {
+    showErrorToast('Wait for the GitHub sync operation to finish');
+    return;
+  }
+  if (
+    state.projectFilesIncomplete
+    && projectId !== state.currentProjectId
+  ) {
+    showErrorToast(
+      'Reopen the current project or export its incomplete recovery copy before switching.'
+    );
+    return;
+  }
+
+  const requestId = ++_openProjectRequestId;
+  clearTimeout(_backendSaveTimer);
+  setProjectSwitchInProgress(true);
+
   try {
+    if (!state.projectFilesIncomplete) {
+      await saveProjectToBackend({ throwOnError: true });
+    }
+    if (requestId !== _openProjectRequestId) return;
+
     const res = await fetch(`${API_BASE}/projects/${projectId}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const project = await res.json();
+    if (requestId !== _openProjectRequestId) return;
 
-    state.projectFiles = project.files || {};
-    state.mainFile = project.main_file;
-    state.currentFile = project.main_file;
-    state.projectMode = true;
-    state.currentProjectId = project.id;
-    state.currentProjectName = project.name;
-
-    // Load main file into editor
-    state.currentLatex = state.projectFiles[state.mainFile] || '';
-    elements.editor.value = state.currentLatex;
-    elements.currentFileName.textContent = state.mainFile ? state.mainFile.split('/').pop() : 'LaTeX Source';
-
-    // Show file tree and download zip button
-    elements.fileTree.classList.add('visible');
-    elements.downloadZipBtn.style.display = '';
-    buildFileTree(state.projectFiles);
-
+    restoreProject(project, { showToast: false });
     closeProjectsDrawer();
-    localStorage.setItem('latexEditor_lastProjectId', project.id);
     compile();
     showSuccessToast(`Opened project: ${project.name}`);
   } catch (err) {
+    if (requestId !== _openProjectRequestId) return;
     console.error('Failed to open project:', err);
-    showErrorToast('Failed to open project');
+    showErrorToast(`Failed to open project: ${err.message}`);
+  } finally {
+    if (requestId === _openProjectRequestId) {
+      setProjectSwitchInProgress(false);
+    }
   }
 }
 
-async function saveProjectToBackend() {
-  if (!state.projectMode) return;
+let _backendSaveInFlight = null;
 
-  // Sync current editor content
+async function saveProjectToBackend(options = {}) {
+  if (state.githubSyncInProgress && !options.allowDuringGithubSync) {
+    return true;
+  }
+  if (state.projectFilesIncomplete) {
+    const error = new Error(
+      'This recovery copy is missing binary files. Reopen or pull the complete project before saving.'
+    );
+    if (options.throwOnError) throw error;
+    return false;
+  }
+
+  const snapshot = captureProjectSave();
+  if (!snapshot) return true;
+
+  const previousSave = _backendSaveInFlight;
+  const savePromise = (async () => {
+    if (previousSave) {
+      await previousSave.catch(() => {});
+    }
+    return performProjectSave(snapshot, options);
+  })();
+  _backendSaveInFlight = savePromise;
+  try {
+    return await savePromise;
+  } finally {
+    if (_backendSaveInFlight === savePromise) {
+      _backendSaveInFlight = null;
+    }
+  }
+}
+
+function captureProjectSave() {
+  if (!state.projectMode) return null;
+
   if (state.currentFile && state.projectFiles[state.currentFile] !== undefined) {
     if (!isBinaryContent(state.projectFiles[state.currentFile])) {
       state.projectFiles[state.currentFile] = state.currentLatex;
     }
   }
 
-  const files = {};
-  for (const [path, content] of Object.entries(state.projectFiles)) {
-    if (isBinaryContent(content)) {
-      files[path] = { type: 'binary', content: content.content || content };
-    } else {
-      files[path] = content;
-    }
-  }
+  return {
+    projectId: state.currentProjectId,
+    projectName: state.currentProjectName,
+    mainFile: state.mainFile,
+    files: serializeProjectFiles(),
+    github: getCurrentGithubLink(),
+  };
+}
 
+function isProjectSaveActive(snapshot) {
+  if (snapshot.projectId) {
+    return state.currentProjectId === snapshot.projectId;
+  }
+  return (
+    state.currentProjectId === null
+    && state.currentProjectName === snapshot.projectName
+    && state.mainFile === snapshot.mainFile
+  );
+}
+
+async function performProjectSave(snapshot, options = {}) {
+  const { throwOnError = false } = options;
+  const activeProjectId = (
+    !snapshot.projectId
+    && state.currentProjectId
+    && state.currentProjectName === snapshot.projectName
+    && state.mainFile === snapshot.mainFile
+  )
+    ? state.currentProjectId
+    : snapshot.projectId;
   const payload = {
-    files,
-    main_file: state.mainFile,
+    files: snapshot.files,
+    main_file: snapshot.mainFile,
+    github: snapshot.github,
   };
 
   try {
-    if (state.currentProjectId) {
-      const res = await fetch(`${API_BASE}/projects/${state.currentProjectId}`, {
+    let savedProjectId = activeProjectId;
+    if (activeProjectId) {
+      const res = await fetch(`${API_BASE}/projects/${activeProjectId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}));
+        throw new Error(error.error || `HTTP ${res.status}`);
+      }
     } else {
-      const name = state.currentProjectName || (await showPromptModal('Save Project', 'Project name:', 'my-project'));
-      if (!name) return;
+      const name = snapshot.projectName
+        || (await showPromptModal('Save Project', 'Project name:', 'my-project'));
+      if (!name) return false;
       payload.name = name;
       const res = await fetch(`${API_BASE}/projects`, {
         method: 'POST',
@@ -4086,16 +4403,28 @@ async function saveProjectToBackend() {
         throw new Error(err.error || `HTTP ${res.status}`);
       }
       const project = await res.json();
-      state.currentProjectId = project.id;
-      state.currentProjectName = project.name;
+      savedProjectId = project.id;
+      if (isProjectSaveActive(snapshot)) {
+        state.currentProjectId = project.id;
+        state.currentProjectName = project.name;
+        setProjectGithubLink(project.github);
+      }
     }
-    // Remember last project for restart recovery
-    if (state.currentProjectId) {
-      localStorage.setItem('latexEditor_lastProjectId', state.currentProjectId);
+
+    if (
+      savedProjectId
+      && isProjectSaveActive({ ...snapshot, projectId: savedProjectId })
+    ) {
+      localStorage.setItem('latexEditor_lastProjectId', savedProjectId);
     }
+    return true;
   } catch (err) {
     console.error('Failed to save project to backend:', err);
+    if (throwOnError) {
+      throw err;
+    }
     showErrorToast(`Save failed: ${err.message}`);
+    return false;
   }
 }
 
@@ -4144,7 +4473,11 @@ async function deleteProjectFromBackend(projectId, projectName) {
 // Auto-save project to backend periodically (debounced)
 let _backendSaveTimer = null;
 function scheduleBackendSave() {
-  if (!state.projectMode) return;
+  if (
+    !state.projectMode
+    || state.projectFilesIncomplete
+    || state.githubSyncInProgress
+  ) return;
   clearTimeout(_backendSaveTimer);
   _backendSaveTimer = setTimeout(() => saveProjectToBackend(), 5000);
 }
@@ -4153,47 +4486,105 @@ function scheduleBackendSave() {
 // GITHUB INTEGRATION
 // ============================================
 
+const GITHUB_API_BASE = 'https://api.github.com';
+const MAX_GITHUB_IMPORT_FILES = 500;
+const MAX_GITHUB_IMPORT_BYTES = 7 * 1024 * 1024;
+const GITHUB_REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
+const GITHUB_BRANCH_FORBIDDEN = /[\x00-\x20\x7f~^:?*\[\\]/;
+const GITHUB_FILE_MODES = new Set(['100644', '100755', '120000']);
+
 function openGithubModal() {
   elements.githubModalOverlay.classList.add('open');
-  // Load saved token
-  const savedToken = localStorage.getItem('latexEditor_githubToken');
-  const savedRepo = localStorage.getItem('latexEditor_githubRepo');
-  if (savedToken) {
-    elements.githubToken.value = savedToken;
-    state.githubToken = savedToken;
-    state.githubRepo = savedRepo;
-    showGithubConnected(savedRepo);
+
+  loadGithubSession();
+  elements.githubToken.value = state.githubToken || '';
+
+  const link = getCurrentGithubLink();
+  elements.githubRepo.value = link?.repo
+    || localStorage.getItem('latexEditor_githubRepo')
+    || '';
+  elements.githubPath.value = link?.path
+    ?? localStorage.getItem('latexEditor_githubPath')
+    ?? '';
+  elements.githubBranch.value = link?.branch
+    || localStorage.getItem('latexEditor_githubBranch')
+    || '';
+
+  refreshGithubModal();
+  if (state.githubToken) {
+    elements.githubRepo.focus();
+  } else {
+    elements.githubToken.focus();
   }
 }
 
-function closeGithubModal() {
+function closeGithubModal(force = false) {
+  if (state.githubSyncInProgress && !force) {
+    return;
+  }
   elements.githubModalOverlay.classList.remove('open');
 }
 
-function showGithubConnected(repo) {
-  elements.githubStatus.className = 'github-status connected';
-  elements.githubStatus.textContent = repo ? `Connected to ${repo}` : 'Token configured';
-  elements.githubStatus.style.display = 'block';
-  elements.githubSave.style.display = 'none';
-  elements.githubDisconnect.style.display = '';
-  elements.githubRepoGroup.style.display = '';
-  if (repo) {
-    elements.githubRepo.value = repo;
-    elements.githubPush.style.display = '';
-    elements.githubPull.style.display = '';
+function loadGithubSession() {
+  try {
+    const legacyToken = localStorage.getItem('latexEditor_githubToken');
+    const token = sessionStorage.getItem('latexEditor_githubToken') || legacyToken;
+    if (token) {
+      sessionStorage.setItem('latexEditor_githubToken', token);
+      state.githubToken = token;
+    }
+    state.githubLogin = sessionStorage.getItem('latexEditor_githubLogin');
+    localStorage.removeItem('latexEditor_githubToken');
+  } catch (error) {
+    console.error('Failed to restore GitHub session:', error);
   }
 }
 
-function showGithubDisconnected() {
-  elements.githubStatus.className = 'github-status';
-  elements.githubStatus.style.display = 'none';
-  elements.githubSave.style.display = '';
-  elements.githubDisconnect.style.display = 'none';
-  elements.githubPush.style.display = 'none';
-  elements.githubPull.style.display = 'none';
-  elements.githubRepoGroup.style.display = 'none';
-  elements.githubToken.value = '';
-  elements.githubRepo.value = '';
+function refreshGithubModal() {
+  const connected = Boolean(state.githubToken);
+  const link = getCurrentGithubLink();
+
+  elements.githubStatus.className = connected
+    ? 'github-status connected'
+    : 'github-status';
+  elements.githubStatus.textContent = connected
+    ? `Authenticated${state.githubLogin ? ` as ${state.githubLogin}` : ''}`
+    : '';
+  elements.githubStatus.style.display = connected ? 'block' : 'none';
+  elements.githubSave.style.display = connected ? 'none' : '';
+  elements.githubDisconnect.style.display = connected ? '' : 'none';
+  elements.githubRepoGroup.style.display = connected ? '' : 'none';
+  elements.githubImport.style.display = connected ? '' : 'none';
+  elements.githubPull.style.display = connected && link ? '' : 'none';
+  elements.githubCommit.style.display = connected && link ? '' : 'none';
+
+  if (link) {
+    const folder = link.path ? `/${link.path}` : '';
+    elements.githubLinkedSourcePath.textContent =
+      `${link.repo}${folder} @ ${link.branch}`;
+    elements.githubLinkedSourceSha.textContent = link.sha.slice(0, 7);
+    elements.githubLinkedSource.style.display = 'flex';
+  } else {
+    elements.githubLinkedSource.style.display = 'none';
+  }
+
+  setGithubControlsDisabled(state.githubSyncInProgress);
+}
+
+function setGithubControlsDisabled(disabled) {
+  [
+    elements.githubSave,
+    elements.githubDisconnect,
+    elements.githubImport,
+    elements.githubPull,
+    elements.githubCommit,
+    elements.githubRepo,
+    elements.githubPath,
+    elements.githubBranch,
+    elements.closeGithubModal,
+  ].forEach(control => {
+    if (control) control.disabled = disabled;
+  });
 }
 
 async function connectGithub() {
@@ -4206,16 +4597,13 @@ async function connectGithub() {
   }
 
   try {
-    const res = await fetch('https://api.github.com/user', {
-      headers: { Authorization: `token ${token}` },
-    });
-    if (!res.ok) throw new Error('Invalid token');
-    const user = await res.json();
+    const user = await githubApi('/user', {}, token);
 
     state.githubToken = token;
-    localStorage.setItem('latexEditor_githubToken', token);
-    showGithubConnected(null);
-    elements.githubStatus.textContent = `Authenticated as ${user.login}`;
+    state.githubLogin = user.login;
+    sessionStorage.setItem('latexEditor_githubToken', token);
+    sessionStorage.setItem('latexEditor_githubLogin', user.login);
+    refreshGithubModal();
     showSuccessToast(`Connected to GitHub as ${user.login}`);
   } catch (err) {
     elements.githubStatus.className = 'github-status error';
@@ -4226,300 +4614,704 @@ async function connectGithub() {
 
 function disconnectGithub() {
   state.githubToken = null;
-  state.githubRepo = null;
+  state.githubLogin = null;
+  sessionStorage.removeItem('latexEditor_githubToken');
+  sessionStorage.removeItem('latexEditor_githubLogin');
   localStorage.removeItem('latexEditor_githubToken');
-  localStorage.removeItem('latexEditor_githubRepo');
-  showGithubDisconnected();
+  elements.githubToken.value = '';
+  refreshGithubModal();
   showSuccessToast('Disconnected from GitHub');
 }
 
-async function pushToGithub() {
+function normalizeGithubFolder(rawPath) {
+  if (typeof rawPath !== 'string' || rawPath.includes('\\')) {
+    throw new Error('Folder must use a repository-relative path');
+  }
+
+  const folder = rawPath.trim().replace(/^\/+|\/+$/g, '');
+  if (!folder) return '';
+
+  const safePath = sanitizePath(folder);
+  if (!safePath || safePath !== folder) {
+    throw new Error('Folder contains an unsafe path segment');
+  }
+  return folder;
+}
+
+function validateGithubBranch(branch, allowEmpty = false) {
+  const normalized = branch.trim();
+  if (!normalized && allowEmpty) return '';
+  if (
+    !normalized
+    || normalized.length > 255
+    || normalized.startsWith('/')
+    || normalized.endsWith('/')
+    || normalized.endsWith('.')
+    || normalized.endsWith('.lock')
+    || normalized.includes('..')
+    || normalized.includes('//')
+    || normalized.includes('@{')
+    || GITHUB_BRANCH_FORBIDDEN.test(normalized)
+  ) {
+    throw new Error('Enter a valid Git branch name');
+  }
+  return normalized;
+}
+
+function getGithubImportConfig() {
   const repo = elements.githubRepo.value.trim();
-  if (!repo || !repo.includes('/')) {
-    showErrorToast('Enter a valid repository (owner/repo)');
-    return;
-  }
-  if (!state.githubToken) {
-    showErrorToast('Connect to GitHub first');
-    return;
-  }
-  if (!state.projectMode || Object.keys(state.projectFiles).length === 0) {
-    showErrorToast('No project to push');
-    return;
+  if (!GITHUB_REPO_PATTERN.test(repo)) {
+    throw new Error('Repository must use the owner/repo format');
   }
 
-  state.githubRepo = repo;
+  const path = normalizeGithubFolder(elements.githubPath.value);
+  const branch = validateGithubBranch(elements.githubBranch.value, true);
+
   localStorage.setItem('latexEditor_githubRepo', repo);
-
-  if (state.currentFile && !isBinaryContent(state.projectFiles[state.currentFile])) {
-    state.projectFiles[state.currentFile] = state.currentLatex;
+  localStorage.setItem('latexEditor_githubPath', path);
+  if (branch) {
+    localStorage.setItem('latexEditor_githubBranch', branch);
+  } else {
+    localStorage.removeItem('latexEditor_githubBranch');
   }
 
+  return { repo, path, branch };
+}
+
+function encodeGithubRepo(repo) {
+  return repo.split('/').map(encodeURIComponent).join('/');
+}
+
+function encodeGithubRef(branch) {
+  return ['heads', ...branch.split('/')].map(encodeURIComponent).join('/');
+}
+
+async function githubApi(path, options = {}, token = state.githubToken) {
   const headers = {
-    Authorization: `token ${state.githubToken}`,
-    'Content-Type': 'application/json',
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    ...(options.headers || {}),
   };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
 
+  const response = await fetch(`${GITHUB_API_BASE}${path}`, {
+    ...options,
+    cache: 'no-store',
+    headers,
+  });
+  const data = response.status === 204
+    ? null
+    : await response.json().catch(() => null);
+
+  if (!response.ok) {
+    let message = data?.message || `GitHub request failed (HTTP ${response.status})`;
+    if (
+      response.status === 403
+      && response.headers.get('X-RateLimit-Remaining') === '0'
+    ) {
+      const reset = Number(response.headers.get('X-RateLimit-Reset')) * 1000;
+      const resetText = Number.isFinite(reset)
+        ? new Date(reset).toLocaleTimeString()
+        : 'later';
+      message = `GitHub API rate limit reached. Try again after ${resetText}.`;
+    }
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
+
+  return data;
+}
+
+async function getGithubRepoInfo(repo) {
+  return githubApi(`/repos/${encodeGithubRepo(repo)}`);
+}
+
+async function getGithubBranchSnapshot(repo, branch) {
+  const encodedRepo = encodeGithubRepo(repo);
+  const ref = await githubApi(
+    `/repos/${encodedRepo}/git/ref/${encodeGithubRef(branch)}`
+  );
+  const commit = await githubApi(
+    `/repos/${encodedRepo}/git/commits/${encodeURIComponent(ref.object.sha)}`
+  );
+  return {
+    sha: ref.object.sha,
+    rootTreeSha: commit.tree.sha,
+  };
+}
+
+async function getGithubFolderTree(repo, rootTreeSha, folder) {
+  const encodedRepo = encodeGithubRepo(repo);
+  let treeSha = rootTreeSha;
+
+  if (folder) {
+    for (const segment of folder.split('/')) {
+      const tree = await githubApi(
+        `/repos/${encodedRepo}/git/trees/${encodeURIComponent(treeSha)}`
+      );
+      const next = tree.tree.find(
+        entry => entry.path === segment && entry.type === 'tree'
+      );
+      if (!next) {
+        throw new Error(`Folder "${folder}" was not found on the selected branch`);
+      }
+      treeSha = next.sha;
+    }
+  }
+
+  const tree = await githubApi(
+    `/repos/${encodedRepo}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`
+  );
+  if (tree.truncated) {
+    throw new Error('The selected folder is too large to sync safely');
+  }
+  return {
+    sha: treeSha,
+    entries: tree.tree || [],
+  };
+}
+
+function base64ToBytes(base64) {
+  const normalized = base64.replace(/\s/g, '');
+  let binary;
   try {
-    showStatus('Pushing to GitHub...', 'info');
+    binary = atob(normalized);
+  } catch {
+    throw new Error('GitHub returned malformed Base64 file content');
+  }
 
-    let repoRes = await fetch(`https://api.github.com/repos/${repo}`, { headers });
-    if (repoRes.status === 404) {
-      const [owner, repoName] = repo.split('/');
-      const userRes = await fetch('https://api.github.com/user', { headers });
-      const user = await userRes.json();
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return { bytes, normalized };
+}
 
-      const createEndpoint = owner === user.login
-        ? 'https://api.github.com/user/repos'
-        : `https://api.github.com/orgs/${owner}/repos`;
-
-      repoRes = await fetch(createEndpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ name: repoName, private: true, auto_init: true }),
-      });
-      if (!repoRes.ok) throw new Error('Failed to create repository');
-      await new Promise(r => setTimeout(r, 2000));
+function decodeGithubBlob(path, base64) {
+  const { bytes, normalized } = base64ToBytes(base64);
+  if (!BINARY_EXTENSIONS.test(path)) {
+    try {
+      return {
+        content: new TextDecoder(
+          'utf-8',
+          { fatal: true, ignoreBOM: true }
+        ).decode(bytes),
+        size: bytes.length,
+      };
+    } catch {
+      // Unknown binary extensions remain byte-identical Base64 payloads.
     }
+  }
+  return {
+    content: { isBinary: true, content: normalized },
+    size: bytes.length,
+  };
+}
 
-    // Resolve default branch name (main, master, etc.)
-    const repoInfoRes = await fetch(`https://api.github.com/repos/${repo}`, { headers });
-    if (!repoInfoRes.ok) {
-      const err = await repoInfoRes.json().catch(() => ({}));
-      throw new Error(err.message || `Failed to fetch repository info (HTTP ${repoInfoRes.status})`);
+function findGithubMainFile(files, preferred = null) {
+  if (
+    preferred
+    && typeof files[preferred] === 'string'
+    && preferred.toLowerCase().endsWith('.tex')
+  ) {
+    return preferred;
+  }
+
+  const texFiles = Object.keys(files).filter(
+    path => path.toLowerCase().endsWith('.tex') && typeof files[path] === 'string'
+  );
+  const preferredNames = [
+    'resume.tex',
+    'main.tex',
+    'cv.tex',
+    'document.tex',
+    'curriculum.tex',
+    'curriculum-vitae.tex',
+  ];
+
+  for (const name of preferredNames) {
+    const rootMatch = texFiles.find(path => path.toLowerCase() === name);
+    if (rootMatch) return rootMatch;
+    const nestedMatch = texFiles.find(
+      path => path.split('/').pop().toLowerCase() === name
+    );
+    if (nestedMatch) return nestedMatch;
+  }
+  return texFiles.find(path => !path.includes('/')) || texFiles[0] || null;
+}
+
+function validateGithubProjectPaths(files) {
+  const paths = Object.keys(files);
+  if (paths.length > MAX_GITHUB_IMPORT_FILES) {
+    throw new Error(`GitHub sync supports up to ${MAX_GITHUB_IMPORT_FILES} files`);
+  }
+
+  const pathSet = new Set(paths);
+  for (const path of paths) {
+    const safePath = sanitizePath(path);
+    if (!safePath || safePath !== path) {
+      throw new Error(`Project contains an unsafe path: ${path}`);
     }
-    const repoData = await repoInfoRes.json();
-    const defaultBranch = repoData.default_branch || 'main';
-
-    const refRes = await fetch(`https://api.github.com/repos/${repo}/git/ref/heads/${defaultBranch}`, { headers });
-    if (!refRes.ok) throw new Error(`Default branch '${defaultBranch}' not found`);
-
-    const refData = await refRes.json();
-    const baseSha = refData.object.sha;
-    const baseCommitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits/${baseSha}`, { headers });
-    if (!baseCommitRes.ok) {
-      const err = await baseCommitRes.json().catch(() => ({}));
-      throw new Error(err.message || `Failed to fetch base commit (HTTP ${baseCommitRes.status})`);
-    }
-    const baseCommitData = await baseCommitRes.json();
-    const baseTreeSha = baseCommitData.tree.sha;
-
-    // Create a unique branch
-    const timestamp = Date.now();
-    let branchName = `latex-editor/update-${timestamp}`;
-    const createBranchRes = await fetch(`https://api.github.com/repos/${repo}/git/refs`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
-    });
-    if (!createBranchRes.ok) {
-      const branchErr = await createBranchRes.json().catch(() => ({}));
-      // Retry once with a randomised suffix if the ref already exists (422)
-      if (createBranchRes.status === 422) {
-        branchName = `${branchName}-${Math.random().toString(36).slice(2, 8)}`;
-        const retryRes = await fetch(`https://api.github.com/repos/${repo}/git/refs`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
-        });
-        if (!retryRes.ok) {
-          const retryErr = await retryRes.json().catch(() => ({}));
-          throw new Error(retryErr.message || `Failed to create branch (HTTP ${retryRes.status})`);
-        }
-      } else {
-        throw new Error(branchErr.message || `Failed to create branch (HTTP ${createBranchRes.status})`);
+    const segments = path.split('/');
+    for (let index = 1; index < segments.length; index++) {
+      if (pathSet.has(segments.slice(0, index).join('/'))) {
+        throw new Error(`File and folder paths collide at ${path}`);
       }
     }
-
-    // Create blobs for each file
-    const tree = [];
-    for (const [path, content] of Object.entries(state.projectFiles)) {
-      let blobContent, encoding;
-      if (isBinaryContent(content)) {
-        blobContent = content.content || content;
-        encoding = 'base64';
-      } else {
-        blobContent = content;
-        encoding = 'utf-8';
-      }
-
-      const blobRes = await fetch(`https://api.github.com/repos/${repo}/git/blobs`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ content: blobContent, encoding }),
-      });
-      if (!blobRes.ok) throw new Error(`Failed to create blob for ${path}`);
-      const blob = await blobRes.json();
-
-      tree.push({ path, mode: '100644', type: 'blob', sha: blob.sha });
-    }
-
-    const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ tree, base_tree: baseTreeSha }),
-    });
-    if (!treeRes.ok) throw new Error('Failed to create tree');
-    const treeData = await treeRes.json();
-
-    const commitMessage = `Update from LaTeX Editor (${new Date().toISOString()})`;
-    const commitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        message: commitMessage,
-        tree: treeData.sha,
-        parents: [baseSha],
-      }),
-    });
-    if (!commitRes.ok) throw new Error('Failed to create commit');
-    const newCommit = await commitRes.json();
-
-    // Point the new branch at the commit
-    const updateBranchRes = await fetch(`https://api.github.com/repos/${repo}/git/refs/heads/${branchName}`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({ sha: newCommit.sha }),
-    });
-    if (!updateBranchRes.ok) throw new Error('Failed to update branch ref');
-
-    // Open a pull request against the default branch
-    const prRes = await fetch(`https://api.github.com/repos/${repo}/pulls`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        title: commitMessage,
-        head: branchName,
-        base: defaultBranch,
-        body: 'Automated pull request created by [LaTeX Editor](https://github.com/mbianchidev/latex-editor).',
-      }),
-    });
-    if (!prRes.ok) {
-      const prErr = await prRes.json();
-      throw new Error(prErr.message || 'Failed to create pull request');
-    }
-    const prData = await prRes.json();
-
-    showGithubConnected(repo);
-    showSuccessToast(`PR #${prData.number} opened on github.com/${repo}`);
-    showStatus('Push complete — PR created', 'success');
-  } catch (err) {
-    console.error('GitHub push failed:', err);
-    showErrorToast(`Push failed: ${err.message}`);
-    showStatus('Push failed', 'error');
   }
 }
 
-async function pullFromGithub() {
-  const repo = elements.githubRepo.value.trim();
-  if (!repo || !repo.includes('/')) {
-    showErrorToast('Enter a valid repository (owner/repo)');
+async function fetchGithubFolderSnapshot(config) {
+  const repoInfo = await getGithubRepoInfo(config.repo);
+  const repo = repoInfo.full_name;
+  const branch = validateGithubBranch(
+    config.branch || repoInfo.default_branch || 'main'
+  );
+  const branchSnapshot = await getGithubBranchSnapshot(repo, branch);
+  const folderTree = await getGithubFolderTree(
+    repo,
+    branchSnapshot.rootTreeSha,
+    config.path
+  );
+  const blobEntries = folderTree.entries.filter(
+    entry => entry.type === 'blob' && !isMacOSJunk(entry.path)
+  );
+
+  if (blobEntries.length === 0) {
+    throw new Error('No files were found in the selected GitHub folder');
+  }
+  if (blobEntries.length > MAX_GITHUB_IMPORT_FILES) {
+    throw new Error(`GitHub sync supports up to ${MAX_GITHUB_IMPORT_FILES} files`);
+  }
+
+  const reportedBytes = blobEntries.reduce(
+    (total, entry) => total + (entry.size || 0),
+    0
+  );
+  if (reportedBytes > MAX_GITHUB_IMPORT_BYTES) {
+    throw new Error('The selected folder is too large for this editor');
+  }
+
+  const files = {};
+  const manifest = {};
+  let decodedBytes = 0;
+
+  for (const entry of blobEntries) {
+    const path = sanitizePath(entry.path);
+    if (!path || path !== entry.path) {
+      throw new Error(`GitHub returned an unsafe file path: ${entry.path}`);
+    }
+    if (!GITHUB_FILE_MODES.has(entry.mode)) {
+      throw new Error(`Unsupported Git file mode ${entry.mode} for ${path}`);
+    }
+
+    const blob = await githubApi(
+      `/repos/${encodeGithubRepo(repo)}/git/blobs/${encodeURIComponent(entry.sha)}`
+    );
+    if (blob.encoding !== 'base64' || typeof blob.content !== 'string') {
+      throw new Error(`GitHub returned unsupported content for ${path}`);
+    }
+
+    const decoded = decodeGithubBlob(path, blob.content);
+    decodedBytes += decoded.size;
+    if (decodedBytes > MAX_GITHUB_IMPORT_BYTES) {
+      throw new Error('The selected folder is too large for this editor');
+    }
+
+    files[path] = decoded.content;
+    manifest[path] = {
+      sha: entry.sha,
+      mode: entry.mode,
+    };
+  }
+
+  validateGithubProjectPaths(files);
+  const mainFile = findGithubMainFile(files);
+  if (!mainFile) {
+    throw new Error('No editable .tex file was found in the selected folder');
+  }
+
+  return {
+    repo,
+    path: config.path,
+    branch,
+    sha: branchSnapshot.sha,
+    manifest,
+    files,
+    mainFile,
+    rootTreeSha: branchSnapshot.rootTreeSha,
+    folderEntries: folderTree.entries,
+  };
+}
+
+function githubLinkFromSnapshot(snapshot) {
+  return {
+    repo: snapshot.repo,
+    path: snapshot.path,
+    branch: snapshot.branch,
+    sha: snapshot.sha,
+    manifest: snapshot.manifest,
+  };
+}
+
+async function backendProjectRequest(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || `HTTP ${response.status}`);
+  }
+  return response.status === 204 ? null : response.json();
+}
+
+function assertActiveProject(projectId) {
+  if (state.currentProjectId !== projectId) {
+    throw new Error('The active project changed during GitHub synchronization');
+  }
+}
+
+async function persistProjectGithubLink(github, projectId) {
+  if (!projectId) {
+    throw new Error('The current project has not been saved locally');
+  }
+  return backendProjectRequest(`${API_BASE}/projects/${projectId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ github }),
+  });
+}
+
+async function runGithubOperation(label, operation) {
+  if (state.githubSyncInProgress) {
+    showErrorToast('Another GitHub sync operation is already running');
     return;
   }
+
+  state.githubSyncInProgress = true;
+  clearTimeout(_backendSaveTimer);
+  refreshGithubModal();
+
+  try {
+    if (_backendSaveInFlight) {
+      await _backendSaveInFlight.catch(() => {});
+    }
+    await operation();
+  } catch (err) {
+    console.error(`${label} failed:`, err);
+    showErrorToast(`${label} failed: ${err.message}`);
+    showStatus(`${label} failed`, 'error');
+  } finally {
+    state.githubSyncInProgress = false;
+    refreshGithubModal();
+  }
+}
+
+async function importFromGithub() {
   if (!state.githubToken) {
     showErrorToast('Connect to GitHub first');
     return;
   }
 
-  state.githubRepo = repo;
-  localStorage.setItem('latexEditor_githubRepo', repo);
-
-  const headers = { Authorization: `token ${state.githubToken}` };
-
+  let config;
   try {
-    showStatus('Pulling from GitHub...', 'info');
+    config = getGithubImportConfig();
+  } catch (error) {
+    showErrorToast(error.message);
+    return;
+  }
 
-    // Resolve default branch name
-    const repoInfoRes = await fetch(`https://api.github.com/repos/${repo}`, { headers });
-    if (!repoInfoRes.ok) {
-      const err = await repoInfoRes.json().catch(() => ({}));
-      throw new Error(err.message || `Failed to fetch repository info (HTTP ${repoInfoRes.status})`);
-    }
-    const repoData = await repoInfoRes.json();
-    const defaultBranch = repoData.default_branch || 'main';
-
-    const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees/${defaultBranch}?recursive=1`, { headers });
-    if (!treeRes.ok) throw new Error(`Failed to fetch tree: HTTP ${treeRes.status}`);
-    const treeData = await treeRes.json();
-
-    const files = {};
-    let mainFile = null;
-    const textExtensions = ['.tex', '.cls', '.sty', '.bib', '.bst', '.txt', '.md', '.cfg', '.def', '.dtx', '.ins', '.log'];
-
-    for (const item of treeData.tree) {
-      if (item.type !== 'blob') continue;
-      if (item.path.startsWith('.') || item.path.includes('/.')) continue;
-
-      const blobRes = await fetch(`https://api.github.com/repos/${repo}/git/blobs/${item.sha}`, { headers });
-      if (!blobRes.ok) continue;
-      const blob = await blobRes.json();
-
-      const ext = '.' + item.path.split('.').pop().toLowerCase();
-      if (textExtensions.includes(ext)) {
-        files[item.path] = atob(blob.content);
-      } else {
-        files[item.path] = { type: 'binary', content: blob.content };
+  await runGithubOperation('Import', async () => {
+    showStatus('Reading GitHub folder...', 'info');
+    if (state.projectMode) {
+      if (state.projectFilesIncomplete) {
+        throw new Error(
+          'The current recovery copy is missing binary files. Pull, reopen, or export it before importing another project.'
+        );
       }
-
-      // Detect main file
-      if (!mainFile && (item.path === 'main.tex' || item.path === 'resume.tex' || item.path.endsWith('.tex'))) {
-        mainFile = item.path;
-      }
+      await saveProjectToBackend({
+        throwOnError: true,
+        allowDuringGithubSync: true,
+      });
     }
 
-    if (Object.keys(files).length === 0) {
-      showErrorToast('No files found in repository');
+    const snapshot = await fetchGithubFolderSnapshot(config);
+    const defaultName = snapshot.path
+      ? snapshot.path.split('/').pop()
+      : snapshot.repo.split('/').pop();
+    const projectName = await showPromptModal(
+      'Import GitHub Folder',
+      'Local project name:',
+      defaultName
+    );
+    if (!projectName?.trim()) {
+      showStatus('Ready', 'success');
       return;
     }
 
-    if (!mainFile) mainFile = Object.keys(files).find(f => f.endsWith('.tex')) || Object.keys(files)[0];
-
-    // Close the GitHub modal before prompting for project name
-    elements.githubModalOverlay.style.display = 'none';
-
-    const projectName = await showPromptModal('Project Name', 'Project name:', repo.split('/').pop());
-    if (!projectName) {
-      elements.githubModalOverlay.style.display = '';
-      return;
-    }
-
-    // Save to backend
-    const saveRes = await fetch(`${API_BASE}/projects`, {
+    const project = await backendProjectRequest(`${API_BASE}/projects`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: projectName, files, main_file: mainFile }),
+      body: JSON.stringify({
+        name: projectName.trim(),
+        files: serializeProjectFiles(snapshot.files),
+        main_file: snapshot.mainFile,
+        github: githubLinkFromSnapshot(snapshot),
+      }),
     });
 
-    if (!saveRes.ok) {
-      const err = await saveRes.json();
-      throw new Error(err.error || `HTTP ${saveRes.status}`);
-    }
-
-    const project = await saveRes.json();
-    state.projectFiles = files;
-    state.mainFile = mainFile;
-    state.currentFile = mainFile;
-    state.projectMode = true;
-    state.currentProjectId = project.id;
-    state.currentProjectName = project.name;
-
-    state.currentLatex = files[mainFile] || '';
-    elements.editor.value = state.currentLatex;
-    elements.currentFileName.textContent = mainFile.split('/').pop();
-    elements.fileTree.classList.add('visible');
-    elements.downloadZipBtn.style.display = '';
-    buildFileTree(files);
-
-    closeGithubModal();
+    restoreProject(project, { showToast: false });
+    saveProjectToLocalStorage();
+    closeGithubModal(true);
     closeProjectsDrawer();
     compile();
-    showSuccessToast(`Pulled project from ${repo}`);
-    showStatus('Pull complete', 'success');
-  } catch (err) {
-    console.error('GitHub pull failed:', err);
-    showErrorToast(`Pull failed: ${err.message}`);
-    showStatus('Pull failed', 'error');
+    showSuccessToast(`Imported ${snapshot.repo}/${snapshot.path || ''}`);
+    showStatus('GitHub folder imported', 'success');
+  });
+}
+
+async function pullFromGithub() {
+  const link = getCurrentGithubLink();
+  if (!link || !state.currentProjectId) {
+    showErrorToast('Open a project linked to GitHub first');
+    return;
   }
+  const projectId = state.currentProjectId;
+
+  const confirmed = await showConfirmModal(
+    'Pull Latest',
+    'Replace this local project with the latest files from its linked GitHub folder?',
+    { okLabel: 'Pull latest' }
+  );
+  if (!confirmed) return;
+
+  await runGithubOperation('Pull', async () => {
+    showStatus('Pulling linked GitHub folder...', 'info');
+    const snapshot = await fetchGithubFolderSnapshot({
+      repo: link.repo,
+      path: link.path,
+      branch: link.branch,
+    });
+    assertActiveProject(projectId);
+    const mainFile = findGithubMainFile(snapshot.files, state.mainFile)
+      || snapshot.mainFile;
+    const project = await backendProjectRequest(
+      `${API_BASE}/projects/${projectId}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: serializeProjectFiles(snapshot.files),
+          main_file: mainFile,
+          github: githubLinkFromSnapshot(snapshot),
+        }),
+      }
+    );
+
+    assertActiveProject(projectId);
+    restoreProject(project, { showToast: false });
+    saveProjectToLocalStorage();
+    closeGithubModal(true);
+    compile();
+    showSuccessToast(`Pulled ${snapshot.sha.slice(0, 7)} from GitHub`);
+    showStatus('GitHub folder is up to date', 'success');
+  });
+}
+
+function joinGithubPath(folder, path) {
+  return folder ? `${folder}/${path}` : path;
+}
+
+async function commitToGithub() {
+  const link = getCurrentGithubLink();
+  if (!link || !state.currentProjectId) {
+    showErrorToast('Open a project linked to GitHub first');
+    return;
+  }
+  if (state.projectFilesIncomplete) {
+    showErrorToast('Pull latest before committing this incomplete recovery copy');
+    return;
+  }
+  const projectId = state.currentProjectId;
+
+  const commitMessage = await showPromptModal(
+    'Commit Changes',
+    'Commit message:',
+    `Update ${state.currentProjectName || 'resume'} from LaTeX Editor`
+  );
+  if (!commitMessage?.trim()) return;
+
+  await runGithubOperation('Commit', async () => {
+    showStatus('Preparing GitHub commit...', 'info');
+    if (
+      state.currentFile
+      && !isBinaryContent(state.projectFiles[state.currentFile])
+    ) {
+      state.projectFiles[state.currentFile] = state.currentLatex;
+    }
+    await saveProjectToBackend({
+      throwOnError: true,
+      allowDuringGithubSync: true,
+    });
+    assertActiveProject(projectId);
+
+    const files = cloneProjectFiles();
+    validateGithubProjectPaths(files);
+    const branchSnapshot = await getGithubBranchSnapshot(
+      link.repo,
+      link.branch
+    );
+    if (branchSnapshot.sha !== link.sha) {
+      throw new Error(
+        `The remote branch changed at ${branchSnapshot.sha.slice(0, 7)}. `
+        + 'Pull latest before committing.'
+      );
+    }
+
+    const folderTree = await getGithubFolderTree(
+      link.repo,
+      branchSnapshot.rootTreeSha,
+      link.path
+    );
+    const remoteBlobs = new Map(
+      folderTree.entries
+        .filter(entry => entry.type === 'blob')
+        .map(entry => [entry.path, entry])
+    );
+
+    for (const [path, entry] of Object.entries(link.manifest)) {
+      const remote = remoteBlobs.get(path);
+      if (
+        !remote
+        || remote.sha !== entry.sha
+        || remote.mode !== entry.mode
+      ) {
+        throw new Error(
+          `Remote file ${path} no longer matches the imported snapshot. Pull latest first.`
+        );
+      }
+    }
+
+    const treeChanges = [];
+    const newManifest = {};
+    const encodedRepo = encodeGithubRepo(link.repo);
+
+    for (const [path, content] of Object.entries(files)) {
+      let blobRequest;
+      if (isBinaryContent(content)) {
+        base64ToBytes(content.content || '');
+        blobRequest = {
+          content: content.content || '',
+          encoding: 'base64',
+        };
+      } else if (typeof content === 'string') {
+        blobRequest = {
+          content,
+          encoding: 'utf-8',
+        };
+      } else {
+        throw new Error(`Unsupported project file content for ${path}`);
+      }
+
+      const blob = await githubApi(`/repos/${encodedRepo}/git/blobs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(blobRequest),
+      });
+      const remote = remoteBlobs.get(path);
+      const mode = remote?.mode || link.manifest[path]?.mode || '100644';
+      if (!GITHUB_FILE_MODES.has(mode)) {
+        throw new Error(`Unsupported Git file mode ${mode} for ${path}`);
+      }
+
+      newManifest[path] = { sha: blob.sha, mode };
+      if (!remote || remote.sha !== blob.sha || remote.mode !== mode) {
+        treeChanges.push({
+          path: joinGithubPath(link.path, path),
+          mode,
+          type: 'blob',
+          sha: blob.sha,
+        });
+      }
+    }
+
+    for (const [path, entry] of Object.entries(link.manifest)) {
+      if (Object.prototype.hasOwnProperty.call(files, path)) continue;
+      treeChanges.push({
+        path: joinGithubPath(link.path, path),
+        mode: entry.mode,
+        type: 'blob',
+        sha: null,
+      });
+    }
+
+    if (treeChanges.length === 0) {
+      showSuccessToast('Project is already synced with GitHub');
+      showStatus('No GitHub changes to commit', 'success');
+      return;
+    }
+
+    const tree = await githubApi(`/repos/${encodedRepo}/git/trees`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        base_tree: branchSnapshot.rootTreeSha,
+        tree: treeChanges,
+      }),
+    });
+    const commit = await githubApi(`/repos/${encodedRepo}/git/commits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: commitMessage.trim(),
+        tree: tree.sha,
+        parents: [branchSnapshot.sha],
+      }),
+    });
+
+    try {
+      await githubApi(
+        `/repos/${encodedRepo}/git/refs/${encodeGithubRef(link.branch)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sha: commit.sha, force: false }),
+        }
+      );
+    } catch (error) {
+      if (error.status === 409 || error.status === 422) {
+        throw new Error(
+          'The branch moved or is protected. Pull latest or choose a writable branch.'
+        );
+      }
+      throw error;
+    }
+
+    const updatedLink = {
+      ...link,
+      sha: commit.sha,
+      manifest: newManifest,
+    };
+    setProjectGithubLink(updatedLink);
+    saveProjectToLocalStorage();
+
+    try {
+      await persistProjectGithubLink(updatedLink, projectId);
+    } catch (error) {
+      console.error('GitHub commit metadata persistence failed:', error);
+      showErrorToast(
+        `Commit ${commit.sha.slice(0, 7)} succeeded, but the local sync marker `
+        + `could not be saved: ${error.message}`
+      );
+      showStatus('Committed; local sync marker not saved', 'error');
+      return;
+    }
+
+    closeGithubModal(true);
+    showSuccessToast(`Committed ${commit.sha.slice(0, 7)} to ${link.branch}`);
+    showStatus('GitHub commit complete', 'success');
+  });
 }
 
 // ============================================

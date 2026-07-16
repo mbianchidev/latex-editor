@@ -2,8 +2,10 @@
 Backend API Tests
 """
 import os
+import sqlite3
 import tempfile
 import pytest
+import app as app_module
 from app import app, documents, documents_lock, MAX_DOCUMENTS, DB_PATH
 
 
@@ -15,7 +17,6 @@ def client():
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
         test_db = f.name
     
-    import app as app_module
     original_db = app_module.DB_PATH
     app_module.DB_PATH = test_db
     app_module.init_db()
@@ -511,3 +512,164 @@ class TestProjectsCRUD:
         assert response.status_code == 201
         data = response.get_json()
         assert data["file_count"] == 2
+        assert data["files"]["font.ttf"] == {
+            "isBinary": True,
+            "type": "binary",
+            "content": "base64data=="
+        }
+
+
+class TestProjectGithubLink:
+    """Tests for persisted GitHub folder synchronization metadata."""
+
+    def test_create_project_with_github_link(self, client):
+        github = {
+            "repo": "mbianchidev/my-curriculum",
+            "path": "resume",
+            "branch": "main",
+            "sha": "a" * 40,
+            "manifest": {
+                "resume.tex": {
+                    "sha": "b" * 40,
+                    "mode": "100644"
+                }
+            }
+        }
+        response = client.post("/api/v1/projects", json={
+            "name": "Imported Resume",
+            "main_file": "resume.tex",
+            "files": {"resume.tex": "\\documentclass{article}"},
+            "github": github
+        })
+
+        assert response.status_code == 201
+        project = response.get_json()
+        assert project["github"] == github
+
+        get_response = client.get(f"/api/v1/projects/{project['id']}")
+        assert get_response.get_json()["github"] == github
+
+        list_response = client.get("/api/v1/projects")
+        listed_github = list_response.get_json()["projects"][0]["github"]
+        assert listed_github == {
+            "repo": github["repo"],
+            "path": github["path"],
+            "branch": github["branch"],
+            "sha": github["sha"]
+        }
+
+    def test_update_and_clear_project_github_link(self, client):
+        create = client.post("/api/v1/projects", json={
+            "name": "Link Later",
+            "files": {"main.tex": "content"}
+        })
+        project_id = create.get_json()["id"]
+        github = {
+            "repo": "mbianchidev/my-curriculum",
+            "path": "",
+            "branch": "feature/resume",
+            "sha": "c" * 40,
+            "manifest": {}
+        }
+
+        update = client.put(f"/api/v1/projects/{project_id}", json={
+            "github": github
+        })
+        assert update.status_code == 200
+        assert update.get_json()["github"] == github
+
+        clear = client.put(f"/api/v1/projects/{project_id}", json={
+            "github": None
+        })
+        assert clear.status_code == 200
+        assert clear.get_json()["github"] is None
+
+    @pytest.mark.parametrize("github", [
+        {
+            "path": "resume",
+            "branch": "main",
+            "sha": "a" * 40,
+            "manifest": {}
+        },
+        {
+            "repo": "mbianchidev/my-curriculum",
+            "path": "../resume",
+            "branch": "main",
+            "sha": "a" * 40,
+            "manifest": {}
+        },
+        {
+            "repo": "mbianchidev/my-curriculum",
+            "path": "resume",
+            "branch": "main",
+            "sha": "not-a-sha",
+            "manifest": {}
+        },
+        {
+            "repo": "mbianchidev/my-curriculum",
+            "path": "resume",
+            "branch": "main",
+            "sha": "a" * 40,
+            "manifest": {
+                "../outside.tex": {
+                    "sha": "b" * 40,
+                    "mode": "100644"
+                }
+            }
+        }
+    ])
+    def test_rejects_invalid_github_link(self, client, github):
+        response = client.post("/api/v1/projects", json={
+            "name": "Invalid Link",
+            "files": {"main.tex": "content"},
+            "github": github
+        })
+
+        assert response.status_code == 400
+        assert "error" in response.get_json()
+
+    def test_init_db_migrates_existing_projects_table(self):
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as db_file:
+            db_path = db_file.name
+
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                main_file TEXT NOT NULL DEFAULT 'main.tex',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE project_files (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                is_binary INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        conn.commit()
+        conn.close()
+
+        original_db = app_module.DB_PATH
+        app_module.DB_PATH = db_path
+        try:
+            app_module.init_db()
+            migrated = sqlite3.connect(db_path)
+            columns = {
+                row[1]
+                for row in migrated.execute("PRAGMA table_info(projects)").fetchall()
+            }
+            migrated.close()
+        finally:
+            app_module.DB_PATH = original_db
+            os.unlink(db_path)
+
+        assert {
+            "github_repo",
+            "github_path",
+            "github_branch",
+            "github_sha",
+            "github_manifest"
+        }.issubset(columns)

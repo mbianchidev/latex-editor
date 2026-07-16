@@ -5,6 +5,7 @@ Provides health check, document storage, and project management with SQLite pers
 import os
 import uuid
 import json
+import re
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -112,6 +113,11 @@ def init_db():
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             main_file TEXT NOT NULL DEFAULT 'main.tex',
+            github_repo TEXT,
+            github_path TEXT,
+            github_branch TEXT,
+            github_sha TEXT,
+            github_manifest TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -126,6 +132,21 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_project_files_project ON project_files(project_id);
     """)
+
+    existing_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()
+    }
+    github_columns = {
+        "github_repo": "TEXT",
+        "github_path": "TEXT",
+        "github_branch": "TEXT",
+        "github_sha": "TEXT",
+        "github_manifest": "TEXT",
+    }
+    for column, column_type in github_columns.items():
+        if column not in existing_columns:
+            conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {column_type}")
+
     conn.commit()
     conn.close()
 
@@ -139,12 +160,150 @@ def _utcnow():
     return datetime.now(timezone.utc).isoformat()
 
 
+GITHUB_REPO_PATTERN = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,38})/"
+    r"[A-Za-z0-9_.-]{1,100}$"
+)
+GITHUB_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
+GITHUB_FILE_MODES = {"100644", "100755", "120000"}
+GITHUB_BRANCH_FORBIDDEN = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]")
+
+
+def _validate_relative_path(path, allow_empty=False):
+    """Validate a repository-relative path without changing its meaning."""
+    if not isinstance(path, str):
+        raise ValueError("GitHub paths must be strings")
+    if path == "" and allow_empty:
+        return ""
+    if not path or path.startswith("/") or path.endswith("/") or "\\" in path:
+        raise ValueError("GitHub paths must be relative and normalized")
+    if len(path) > 1024:
+        raise ValueError("GitHub path exceeds 1024 characters")
+
+    segments = path.split("/")
+    if any(
+        not segment
+        or segment in {".", ".."}
+        or any(ord(char) < 32 or ord(char) == 127 for char in segment)
+        for segment in segments
+    ):
+        raise ValueError("GitHub path contains an unsafe segment")
+    return path
+
+
+def _validate_github_branch(branch):
+    """Validate the subset of Git reference rules needed for branch names."""
+    if not isinstance(branch, str):
+        raise ValueError("GitHub branch must be a string")
+    branch = branch.strip()
+    if (
+        not branch
+        or len(branch) > 255
+        or branch.startswith("/")
+        or branch.endswith("/")
+        or branch.endswith(".")
+        or branch.endswith(".lock")
+        or ".." in branch
+        or "//" in branch
+        or "@{" in branch
+        or GITHUB_BRANCH_FORBIDDEN.search(branch)
+    ):
+        raise ValueError("GitHub branch is invalid")
+    return branch
+
+
+def _validate_github_link(value):
+    """Validate and normalize the all-or-none GitHub project link."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("'github' must be an object or null")
+
+    required = {"repo", "path", "branch", "sha", "manifest"}
+    if not required.issubset(value):
+        raise ValueError(
+            "'github' requires repo, path, branch, sha, and manifest"
+        )
+
+    repo = value["repo"]
+    if not isinstance(repo, str) or not GITHUB_REPO_PATTERN.fullmatch(repo.strip()):
+        raise ValueError("GitHub repository must use the owner/repo format")
+    repo = repo.strip()
+
+    path = _validate_relative_path(value["path"], allow_empty=True)
+    branch = _validate_github_branch(value["branch"])
+
+    sha = value["sha"]
+    if not isinstance(sha, str) or not GITHUB_SHA_PATTERN.fullmatch(sha):
+        raise ValueError("GitHub commit SHA must be a 40-character hexadecimal value")
+    sha = sha.lower()
+
+    manifest = value["manifest"]
+    if not isinstance(manifest, dict):
+        raise ValueError("GitHub manifest must be an object")
+    if len(manifest) > 1000:
+        raise ValueError("GitHub manifest exceeds 1000 files")
+
+    normalized_manifest = {}
+    for file_path, entry in manifest.items():
+        safe_path = _validate_relative_path(file_path)
+        if not isinstance(entry, dict):
+            raise ValueError("GitHub manifest entries must be objects")
+        file_sha = entry.get("sha")
+        mode = entry.get("mode")
+        if not isinstance(file_sha, str) or not GITHUB_SHA_PATTERN.fullmatch(file_sha):
+            raise ValueError("GitHub manifest contains an invalid blob SHA")
+        if mode not in GITHUB_FILE_MODES:
+            raise ValueError("GitHub manifest contains an unsupported file mode")
+        normalized_manifest[safe_path] = {
+            "sha": file_sha.lower(),
+            "mode": mode,
+        }
+
+    return {
+        "repo": repo,
+        "path": path,
+        "branch": branch,
+        "sha": sha,
+        "manifest": normalized_manifest,
+    }
+
+
+def _github_db_values(github):
+    """Convert a validated GitHub link to project column values."""
+    if github is None:
+        return None, None, None, None, None
+    return (
+        github["repo"],
+        github["path"],
+        github["branch"],
+        github["sha"],
+        json.dumps(github["manifest"], separators=(",", ":"), sort_keys=True),
+    )
+
+
+def _github_from_row(row, include_manifest=True):
+    """Convert persisted GitHub columns to the public API shape."""
+    if not row["github_repo"]:
+        return None
+    github = {
+        "repo": row["github_repo"],
+        "path": row["github_path"] or "",
+        "branch": row["github_branch"],
+        "sha": row["github_sha"],
+    }
+    if include_manifest:
+        github["manifest"] = json.loads(row["github_manifest"] or "{}")
+    return github
+
+
 def _project_to_dict(row, include_files=False, db=None):
     """Convert a project row to a dict."""
     d = {
         "id": row["id"],
         "name": row["name"],
         "main_file": row["main_file"],
+        "github": _github_from_row(row, include_manifest=include_files),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -156,7 +315,11 @@ def _project_to_dict(row, include_files=False, db=None):
         files = {}
         for f in files_rows:
             if f["is_binary"]:
-                files[f["path"]] = {"type": "binary", "content": f["content"]}
+                files[f["path"]] = {
+                    "isBinary": True,
+                    "type": "binary",
+                    "content": f["content"],
+                }
             else:
                 files[f["path"]] = f["content"]
         d["files"] = files
@@ -394,6 +557,11 @@ def create_project():
     if not isinstance(main_file, str):
         return jsonify({"error": "'main_file' must be a string"}), 400
 
+    try:
+        github = _validate_github_link(data.get("github"))
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
     db = get_db()
 
     # Check project count limit
@@ -408,11 +576,24 @@ def create_project():
 
     project_id = str(uuid.uuid4())
     now = _utcnow()
+    github_values = _github_db_values(github)
 
     try:
         db.execute(
-            "INSERT INTO projects (id, name, main_file, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (project_id, name, main_file, now, now)
+            """
+            INSERT INTO projects (
+                id, name, main_file, github_repo, github_path, github_branch,
+                github_sha, github_manifest, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                project_id,
+                name,
+                main_file,
+                *github_values,
+                now,
+                now,
+            )
         )
 
         for path, content in files.items():
@@ -420,7 +601,10 @@ def create_project():
             is_binary = 0
             file_content = content
 
-            if isinstance(content, dict) and content.get("type") == "binary":
+            if isinstance(content, dict) and (
+                content.get("isBinary") is True
+                or content.get("type") == "binary"
+            ):
                 is_binary = 1
                 file_content = content.get("content", "")
             elif not isinstance(content, str):
@@ -469,6 +653,13 @@ def update_project(project_id):
     if not row:
         return jsonify({"error": "Project not found"}), 404
 
+    github_provided = "github" in data
+    if github_provided:
+        try:
+            github = _validate_github_link(data["github"])
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+
     now = _utcnow()
 
     try:
@@ -489,6 +680,17 @@ def update_project(project_id):
             db.execute("UPDATE projects SET name = ?, updated_at = ? WHERE id = ?",
                        (new_name, now, project_id))
 
+        if github_provided:
+            db.execute(
+                """
+                UPDATE projects
+                SET github_repo = ?, github_path = ?, github_branch = ?,
+                    github_sha = ?, github_manifest = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (*_github_db_values(github), now, project_id),
+            )
+
         if "files" in data and isinstance(data["files"], dict):
             # Replace all files
             db.execute("DELETE FROM project_files WHERE project_id = ?", (project_id,))
@@ -496,7 +698,10 @@ def update_project(project_id):
                 file_id = str(uuid.uuid4())
                 is_binary = 0
                 file_content = content
-                if isinstance(content, dict) and content.get("type") == "binary":
+                if isinstance(content, dict) and (
+                    content.get("isBinary") is True
+                    or content.get("type") == "binary"
+                ):
                     is_binary = 1
                     file_content = content.get("content", "")
                 elif not isinstance(content, str):
