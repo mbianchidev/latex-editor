@@ -560,7 +560,8 @@ def create_project():
     try:
         github = _validate_github_link(data.get("github"))
     except ValueError as error:
-        return jsonify({"error": str(error)}), 400
+        app.logger.warning("Invalid GitHub project metadata: %s", error)
+        return jsonify({"error": "Invalid GitHub project metadata"}), 400
 
     db = get_db()
 
@@ -658,7 +659,8 @@ def update_project(project_id):
         try:
             github = _validate_github_link(data["github"])
         except ValueError as error:
-            return jsonify({"error": str(error)}), 400
+            app.logger.warning("Invalid GitHub project metadata: %s", error)
+            return jsonify({"error": "Invalid GitHub project metadata"}), 400
 
     now = _utcnow()
 
