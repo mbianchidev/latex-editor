@@ -2,17 +2,28 @@
 LaTeX Editor Backend API
 Provides health check, document storage, and project management with SQLite persistence
 """
+import base64
+import binascii
+import io
 import os
-import uuid
 import json
 import re
+import shutil
+import signal
 import sqlite3
+import subprocess
+import tempfile
 import threading
+import time
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
+
 from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from pypdf import PdfReader
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
@@ -30,17 +41,43 @@ ALLOWED_ORIGINS = [
 ]
 CORS(app, origins=ALLOWED_ORIGINS)
 
-# Reject request bodies larger than 10 MB (projects can include fonts/images)
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
-
 # Configuration
-API_VERSION = "1.0.0"
+API_VERSION = "1.1.0"
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
 MAX_DOCUMENTS = int(os.environ.get("MAX_DOCUMENTS", "100"))
 MAX_CONTENT_LENGTH = int(os.environ.get("MAX_DOC_CONTENT_LENGTH", str(1024 * 1024)))
 MAX_TITLE_LENGTH = 256
 MAX_PROJECTS = int(os.environ.get("MAX_PROJECTS", "50"))
 MAX_PROJECT_NAME_LENGTH = 128
+MAX_REQUEST_BYTES = int(os.environ.get("MAX_REQUEST_BYTES", str(35 * 1024 * 1024)))
+MAX_COMPILE_BYTES = int(os.environ.get("MAX_COMPILE_BYTES", str(25 * 1024 * 1024)))
+MAX_COMPILE_FILES = int(os.environ.get("MAX_COMPILE_FILES", "1000"))
+MAX_COMPILED_PDF_BYTES = int(
+    os.environ.get("MAX_COMPILED_PDF_BYTES", str(50 * 1024 * 1024))
+)
+COMPILE_TIMEOUT_SECONDS = int(os.environ.get("COMPILE_TIMEOUT_SECONDS", "60"))
+COMPILE_MEMORY_BYTES = int(
+    os.environ.get("COMPILE_MEMORY_BYTES", str(1536 * 1024 * 1024))
+)
+COMPILE_LOG_LIMIT = 12000
+DEFAULT_LATEX_ENGINE = "xelatex"
+LATEX_ENGINES = {
+    "pdflatex": {
+        "mode": "-pdflatex",
+        "command": "-pdflatex=pdflatex -no-shell-escape %O %S",
+    },
+    "xelatex": {
+        "mode": "-xelatex",
+        "command": "-xelatex=xelatex -no-shell-escape %O %S",
+    },
+    "lualatex": {
+        "mode": "-lualatex",
+        "command": "-lualatex=lualatex -no-shell-escape %O %S",
+    },
+}
+
+# Projects can contain embedded fonts and images, whose Base64 JSON representation is larger.
+app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
 
 # DB_PATH: use /data in Docker, environment variable, or OS-appropriate location
 def _resolve_db_path():
@@ -113,6 +150,7 @@ def init_db():
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             main_file TEXT NOT NULL DEFAULT 'main.tex',
+            engine TEXT NOT NULL DEFAULT 'xelatex',
             github_repo TEXT,
             github_path TEXT,
             github_branch TEXT,
@@ -136,6 +174,11 @@ def init_db():
     existing_columns = {
         row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()
     }
+    if "engine" not in existing_columns:
+        conn.execute(
+            "ALTER TABLE projects ADD COLUMN engine TEXT NOT NULL DEFAULT 'xelatex'"
+        )
+
     github_columns = {
         "github_repo": "TEXT",
         "github_path": "TEXT",
@@ -189,6 +232,43 @@ def _validate_relative_path(path, allow_empty=False):
     ):
         raise ValueError("GitHub path contains an unsafe segment")
     return path
+
+
+def _validate_compile_path(path):
+    """Validate a normalized POSIX path inside an isolated compile directory."""
+    if not isinstance(path, str):
+        raise ValueError("Project file paths must be strings")
+    if (
+        not path
+        or len(path) > 1024
+        or path.startswith("/")
+        or path.endswith("/")
+        or "\\" in path
+    ):
+        raise ValueError("Project file paths must be relative and normalized")
+
+    segments = path.split("/")
+    if any(
+        not segment
+        or segment in {".", ".."}
+        or any(ord(char) < 32 or ord(char) == 127 for char in segment)
+        for segment in segments
+    ):
+        raise ValueError("Project file path contains an unsafe segment")
+    return path
+
+
+def _validate_latex_engine(engine):
+    """Return a supported LaTeX engine name."""
+    if engine is None:
+        return DEFAULT_LATEX_ENGINE
+    if not isinstance(engine, str):
+        raise ValueError("LaTeX engine must be a string")
+    engine = engine.strip().lower()
+    if engine not in LATEX_ENGINES:
+        supported = ", ".join(LATEX_ENGINES)
+        raise ValueError(f"Unsupported LaTeX engine. Choose one of: {supported}")
+    return engine
 
 
 def _validate_github_branch(branch):
@@ -303,6 +383,7 @@ def _project_to_dict(row, include_files=False, db=None):
         "id": row["id"],
         "name": row["name"],
         "main_file": row["main_file"],
+        "engine": row["engine"],
         "github": _github_from_row(row, include_manifest=include_files),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -334,6 +415,259 @@ def _project_to_dict(row, include_files=False, db=None):
     return d
 
 
+class LatexCompilerUnavailable(Exception):
+    """Raised when the configured TeX toolchain is not installed."""
+
+
+class LatexCompilationFailed(Exception):
+    """Raised when latexmk reports a document error."""
+
+    def __init__(self, log):
+        super().__init__("LaTeX compilation failed")
+        self.log = log
+
+
+class LatexCompilationTimedOut(Exception):
+    """Raised when a compile exceeds the configured wall-clock limit."""
+
+
+def _normalize_compile_request(data):
+    """Validate a compile payload and return decoded project files."""
+    if not isinstance(data, dict) or not data:
+        raise ValueError("Request body must be a JSON object")
+
+    if "files" in data:
+        files = data["files"]
+        if not isinstance(files, dict):
+            raise ValueError("'files' must be an object mapping paths to contents")
+        main_file = data.get("main_file", "main.tex")
+    elif "latex" in data:
+        latex = data["latex"]
+        if not isinstance(latex, str):
+            raise ValueError("'latex' field must be a string")
+        main_file = data.get("main_file", "document.tex")
+        files = {main_file: latex}
+    else:
+        raise ValueError("Provide either 'files' or 'latex'")
+
+    main_file = _validate_compile_path(main_file)
+    engine = _validate_latex_engine(data.get("engine"))
+    if not files:
+        raise ValueError("At least one project file is required")
+    if len(files) > MAX_COMPILE_FILES:
+        raise ValueError(f"Project exceeds the {MAX_COMPILE_FILES}-file compile limit")
+
+    decoded_files = {}
+    total_bytes = 0
+    for raw_path, value in files.items():
+        path = _validate_compile_path(raw_path)
+        if path in decoded_files:
+            raise ValueError(f"Duplicate project file path: {path}")
+
+        if isinstance(value, str):
+            content = value.encode("utf-8")
+        elif isinstance(value, dict) and (
+            value.get("isBinary") is True or value.get("type") == "binary"
+        ):
+            encoded = value.get("content", "")
+            if not isinstance(encoded, str):
+                raise ValueError(f"Binary file '{path}' must contain Base64 text")
+            try:
+                content = base64.b64decode(
+                    "".join(encoded.split()),
+                    validate=True,
+                )
+            except (binascii.Error, ValueError) as error:
+                raise ValueError(f"Binary file '{path}' contains invalid Base64") from error
+        else:
+            raise ValueError(f"Project file '{path}' has unsupported content")
+
+        total_bytes += len(content)
+        if total_bytes > MAX_COMPILE_BYTES:
+            raise OverflowError(
+                f"Project exceeds the {MAX_COMPILE_BYTES}-byte compile limit"
+            )
+        decoded_files[path] = content
+
+    if main_file not in decoded_files:
+        raise ValueError("The selected main file is not present in the project")
+    if not main_file.lower().endswith(".tex"):
+        raise ValueError("The selected main file must use the .tex extension")
+    if not isinstance(files[main_file], str):
+        raise ValueError("The selected main file must be a text file")
+    return decoded_files, main_file, engine
+
+
+def _write_compile_files(root, files):
+    """Write validated project files into an empty compile directory."""
+    for path, content in files.items():
+        destination = root.joinpath(*path.split("/"))
+        for parent in destination.parents:
+            if parent == root:
+                break
+            if parent.exists() and not parent.is_dir():
+                raise ValueError(f"Project path conflicts with another file: {path}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists() and destination.is_dir():
+            raise ValueError(f"Project path conflicts with another file: {path}")
+        destination.write_bytes(content)
+
+
+def _build_latexmk_command(engine, main_filename):
+    """Build a latexmk invocation with project configuration disabled."""
+    latexmk = shutil.which("latexmk")
+    if not latexmk:
+        raise LatexCompilerUnavailable("latexmk is not installed")
+
+    engine_config = LATEX_ENGINES[engine]
+    command = [
+        latexmk,
+        "-norc",
+        engine_config["mode"],
+        engine_config["command"],
+        "-interaction=nonstopmode",
+        "-halt-on-error",
+        "-file-line-error",
+        "-synctex=0",
+        main_filename,
+    ]
+
+    prlimit = shutil.which("prlimit")
+    if prlimit:
+        command = [
+            prlimit,
+            f"--as={COMPILE_MEMORY_BYTES}",
+            f"--cpu={COMPILE_TIMEOUT_SECONDS + 5}",
+            "--nofile=256",
+            "--",
+            *command,
+        ]
+    return command
+
+
+def _sanitize_compile_log(log, compile_root):
+    """Remove temporary paths and bound compiler output returned to clients."""
+    sanitized = log.replace(str(compile_root), ".")
+    if len(sanitized) > COMPILE_LOG_LIMIT:
+        sanitized = sanitized[-COMPILE_LOG_LIMIT:]
+        sanitized = f"[earlier compiler output omitted]\n{sanitized}"
+    return sanitized
+
+
+def _compile_error_entries(log):
+    """Extract useful file and line diagnostics from latexmk output."""
+    entries = []
+    seen = set()
+    for line in log.splitlines():
+        match = re.match(r"^(?:\./)?(.+?\.tex):(\d+):\s*(.+)$", line)
+        if match:
+            key = match.groups()
+            if key not in seen:
+                entries.append({
+                    "file": match.group(1),
+                    "line": int(match.group(2)),
+                    "message": match.group(3).strip(),
+                })
+                seen.add(key)
+        elif line.startswith("! "):
+            message = line[2:].strip()
+            key = ("", 0, message)
+            if message and key not in seen:
+                entries.append({"file": "", "line": "?", "message": message})
+                seen.add(key)
+        if len(entries) >= 20:
+            break
+    return entries
+
+
+def _terminate_process_group(process):
+    """Stop latexmk and any TeX child processes."""
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+
+
+def _compile_latex_project(files, main_file, engine):
+    """Compile an isolated project and return PDF bytes, pages, duration, and log."""
+    started_at = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="latex-editor-") as temp_dir:
+        compile_root = Path(temp_dir)
+        _write_compile_files(compile_root, files)
+
+        main_path = compile_root.joinpath(*main_file.split("/"))
+        work_dir = main_path.parent
+        home_dir = compile_root / ".home"
+        cache_dir = compile_root / ".cache"
+        home_dir.mkdir()
+        cache_dir.mkdir()
+
+        command = _build_latexmk_command(engine, main_path.name)
+        environment = os.environ.copy()
+        environment.update({
+            "HOME": str(home_dir),
+            "XDG_CACHE_HOME": str(cache_dir),
+            "openin_any": "p",
+            "openout_any": "p",
+            "shell_escape": "f",
+        })
+
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=work_dir,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                start_new_session=True,
+            )
+        except OSError as error:
+            raise LatexCompilerUnavailable(
+                f"Could not start the LaTeX compiler: {error}"
+            ) from error
+
+        try:
+            output, _ = process.communicate(timeout=COMPILE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as error:
+            _terminate_process_group(process)
+            output, _ = process.communicate()
+            app.logger.warning(
+                "LaTeX compilation timed out after %ss", COMPILE_TIMEOUT_SECONDS
+            )
+            raise LatexCompilationTimedOut() from error
+
+        log = _sanitize_compile_log(output or "", compile_root)
+        if process.returncode != 0:
+            raise LatexCompilationFailed(log)
+
+        pdf_path = main_path.with_suffix(".pdf")
+        if not pdf_path.is_file():
+            raise LatexCompilationFailed(
+                f"{log}\nThe compiler completed without producing a PDF."
+            )
+        if pdf_path.stat().st_size > MAX_COMPILED_PDF_BYTES:
+            raise LatexCompilationFailed(
+                f"{log}\nThe compiled PDF exceeds the configured size limit."
+            )
+
+        pdf_bytes = pdf_path.read_bytes()
+        try:
+            page_count = len(PdfReader(io.BytesIO(pdf_bytes), strict=False).pages)
+        except Exception as error:
+            app.logger.error("Compiler produced an unreadable PDF: %s", error)
+            raise LatexCompilationFailed(
+                f"{log}\nThe compiler produced an unreadable PDF."
+            ) from error
+
+        elapsed_ms = round((time.monotonic() - started_at) * 1000)
+        return pdf_bytes, page_count, elapsed_ms, log
+
+
 @app.route("/health", methods=["GET"])
 def health_check():
     """Health check endpoint for container orchestration"""
@@ -353,7 +687,7 @@ def api_status():
             {"path": "/health", "method": "GET", "description": "Health check"},
             {"path": "/api/v1/status", "method": "GET", "description": "API status"},
             {"path": "/api/v1/settings", "method": "GET", "description": "Server settings"},
-            {"path": "/api/v1/compile", "method": "POST", "description": "Compile LaTeX (future)"},
+            {"path": "/api/v1/compile", "method": "POST", "description": "Compile a LaTeX project to PDF"},
             {"path": "/api/v1/documents", "method": "GET", "description": "List all documents"},
             {"path": "/api/v1/documents", "method": "POST", "description": "Create a document"},
             {"path": "/api/v1/documents/:id", "method": "GET", "description": "Get a document"},
@@ -383,39 +717,59 @@ def get_settings():
         "max_projects": MAX_PROJECTS,
         "max_documents": MAX_DOCUMENTS,
         "max_content_length": MAX_CONTENT_LENGTH,
+        "max_compile_bytes": MAX_COMPILE_BYTES,
+        "max_compile_files": MAX_COMPILE_FILES,
+        "compile_timeout_seconds": COMPILE_TIMEOUT_SECONDS,
+        "latex_engines": list(LATEX_ENGINES),
     })
 
 
 @app.route("/api/v1/compile", methods=["POST"])
 @limiter.limit("30 per minute")
 def compile_latex():
-    """
-    Compile LaTeX endpoint (placeholder for future server-side compilation)
-    Currently, compilation is handled client-side
-    """
+    """Compile a complete LaTeX project and return the generated PDF."""
     data = request.get_json(silent=True)
-    
-    if not data or not isinstance(data, dict):
-        return jsonify({"error": "Request body must be a JSON object"}), 400
 
-    if "latex" not in data:
-        return jsonify({"error": "Missing 'latex' field in request body"}), 400
-    
-    latex_content = data.get("latex", "")
+    try:
+        files, main_file, engine = _normalize_compile_request(data)
+        pdf_bytes, page_count, elapsed_ms, _ = _compile_latex_project(
+            files,
+            main_file,
+            engine,
+        )
+    except OverflowError as error:
+        return jsonify({"error": str(error)}), 413
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except LatexCompilerUnavailable as error:
+        app.logger.error("LaTeX compiler unavailable: %s", error)
+        return jsonify({
+            "error": "LaTeX compiler is unavailable",
+            "details": str(error),
+        }), 503
+    except LatexCompilationTimedOut:
+        return jsonify({
+            "error": (
+                f"LaTeX compilation exceeded the {COMPILE_TIMEOUT_SECONDS}-second limit"
+            )
+        }), 504
+    except LatexCompilationFailed as error:
+        app.logger.info("LaTeX compilation failed for %s", main_file)
+        return jsonify({
+            "error": "LaTeX compilation failed",
+            "errors": _compile_error_entries(error.log),
+            "log": error.log,
+        }), 422
 
-    if not isinstance(latex_content, str):
-        return jsonify({"error": "'latex' field must be a string"}), 400
-
-    if len(latex_content) > MAX_CONTENT_LENGTH:
-        return jsonify({"error": "LaTeX content exceeds maximum allowed size"}), 413
-    
-    # For now, return a placeholder response
-    # Future: integrate with latexmk or pdflatex for server-side compilation
-    return jsonify({
-        "status": "success",
-        "message": "Server-side compilation is planned for future releases. Currently using client-side compilation.",
-        "input_length": len(latex_content)
-    })
+    response = app.response_class(pdf_bytes, mimetype="application/pdf")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Disposition"] = (
+        f'inline; filename="{Path(main_file).stem}.pdf"'
+    )
+    response.headers["X-Compile-Time-Ms"] = str(elapsed_ms)
+    response.headers["X-LaTeX-Engine"] = engine
+    response.headers["X-Page-Count"] = str(page_count)
+    return response
 
 
 @app.route("/api/v1/documents", methods=["GET", "POST"])
@@ -558,6 +912,11 @@ def create_project():
         return jsonify({"error": "'main_file' must be a string"}), 400
 
     try:
+        engine = _validate_latex_engine(data.get("engine"))
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+    try:
         github = _validate_github_link(data.get("github"))
     except ValueError as error:
         app.logger.warning("Invalid GitHub project metadata: %s", error)
@@ -583,14 +942,15 @@ def create_project():
         db.execute(
             """
             INSERT INTO projects (
-                id, name, main_file, github_repo, github_path, github_branch,
-                github_sha, github_manifest, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, name, main_file, engine, github_repo, github_path,
+                github_branch, github_sha, github_manifest, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project_id,
                 name,
                 main_file,
+                engine,
                 *github_values,
                 now,
                 now,
@@ -644,7 +1004,7 @@ def get_project(project_id):
 @app.route("/api/v1/projects/<project_id>", methods=["PUT"])
 @limiter.limit("30 per minute")
 def update_project(project_id):
-    """Update a project (files, main_file)."""
+    """Update a project (files, main_file, engine)."""
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "Request body must be valid JSON"}), 400
@@ -655,6 +1015,12 @@ def update_project(project_id):
         return jsonify({"error": "Project not found"}), 404
 
     github_provided = "github" in data
+    if "engine" in data:
+        try:
+            engine = _validate_latex_engine(data["engine"])
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+
     if github_provided:
         try:
             github = _validate_github_link(data["github"])
@@ -668,6 +1034,12 @@ def update_project(project_id):
         if "main_file" in data:
             db.execute("UPDATE projects SET main_file = ?, updated_at = ? WHERE id = ?",
                        (data["main_file"], now, project_id))
+
+        if "engine" in data:
+            db.execute(
+                "UPDATE projects SET engine = ?, updated_at = ? WHERE id = ?",
+                (engine, now, project_id),
+            )
 
         if "name" in data:
             new_name = data["name"].strip()

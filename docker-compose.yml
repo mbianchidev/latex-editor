@@ -30,6 +30,9 @@ services:
       - DEBUG=false
       - PORT=5000
       - DB_PATH=/data/projects.db
+      - COMPILE_TIMEOUT_SECONDS=${COMPILE_TIMEOUT_SECONDS:-60}
+      - MAX_REQUEST_BYTES=${MAX_REQUEST_BYTES:-36700160}
+      - MAX_COMPILE_BYTES=${MAX_COMPILE_BYTES:-26214400}
     volumes:
       - ${LATEX_EDITOR_DATA:-${HOME}/.latex-editor/data}:/data
     networks:

@@ -4,12 +4,14 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Code of Conduct](https://img.shields.io/badge/Code%20of%20Conduct-Contributor%20Covenant-blue.svg)](CODE_OF_CONDUCT.md)
 
-A free, open source LaTeX editor with real-time preview capabilities. Think Overleaf, but without compilation limits, completely free, and self-hostable.
+A free, open source LaTeX editor with compiler-accurate PDF preview. Think Overleaf, but
+self-hostable and without compile quotas.
 
 ## ✨ Features
 
-- **Real-time Preview**: See your LaTeX document rendered as you type (optional auto-compile)
-- **No Compilation Limits**: Compile as many documents as you want, whenever you want
+- **Exact PDF Preview**: Preview the PDF produced by the selected TeX engine
+- **Preview/Export Parity**: PDF export downloads the same compiled bytes shown in preview
+- **No Compile Quotas**: Compile whenever you want within configurable safety limits
 - **Multi-file Projects**: Upload ZIP files with multiple .tex files, images, and fonts
 - **CV/Resume Support**: Full rendering of CV-class documents (russell.cls) with sections, entries, skills tables
 - **Project Management**: Save, open, rename, and delete projects from a sidebar drawer
@@ -19,7 +21,7 @@ A free, open source LaTeX editor with real-time preview capabilities. Think Over
 - **File Management**: Add, rename, and delete files directly in the browser
 - **Free & Open Source**: No paywalls, no subscriptions, no restrictions
 - **Self-Hostable**: Run it locally with Docker or deploy to your own server
-- **Client-side Processing**: LaTeX-to-HTML rendering happens in your browser
+- **Multiple TeX Engines**: Choose pdfLaTeX, XeLaTeX, or LuaLaTeX per project
 
 ## 🚀 Quick Start
 
@@ -44,14 +46,8 @@ docker compose up -d
 # Open http://localhost in your browser
 ```
 
-### Manual Setup
-
-```bash
-# Serve the frontend folder with any static server
-cd frontend
-python3 -m http.server 8080
-# Open http://localhost:8080
-```
+The backend image includes TeX Live, so the first no-cache build downloads a larger toolchain
+than a typical Flask image.
 
 ## 📖 User Guide
 
@@ -62,8 +58,8 @@ python3 -m http.server 8080
 | **Header Bar** | Projects drawer, new document, upload ZIP, download .tex/.zip/PDF buttons |
 | **Projects Drawer** (left slide-in) | Manage saved projects — open, rename, delete, GitHub settings |
 | **File Tree** (left) | Shown when a ZIP project is loaded — manage files here |
-| **Editor** (center-left) | Write your LaTeX code with syntax highlighting |
-| **Preview** (right) | Live rendered preview of your document |
+| **Editor** (center-left) | Write LaTeX and select the project compiler |
+| **Preview** (right) | The actual compiled PDF, rendered page by page |
 | **Status Bar** | Compilation status and cursor position |
 
 ### Keyboard Shortcuts
@@ -107,11 +103,18 @@ python3 -m http.server 8080
 Only files inside the linked folder are managed. Files elsewhere in the repository
 remain unchanged. Protected branches require a writable branch.
 
-### Auto-Compile Toggle
+### Compilation and PDF Export
 
-The "Auto" checkbox controls automatic compilation:
-- **Off (default)**: Manual compile only - click ▶ or press `Ctrl+Enter`
-- **On**: Auto-compile 3 seconds after you stop typing
+1. Select the same engine you use for standalone builds.
+2. Click ▶ or press `Ctrl+Enter`.
+3. The complete project is compiled with `latexmk`; includes, classes, images, and fonts are
+   resolved by TeX rather than approximated as HTML.
+4. The status bar reports the exact page count.
+5. PDF export downloads that compiled PDF directly. If the source changed after the last
+   compile, export recompiles first.
+
+XeLaTeX is the default and is required by projects that use `fontspec`, such as
+`russell.cls` CVs. The selected engine is stored per project.
 
 ## 📝 LaTeX Examples
 
@@ -162,8 +165,9 @@ Your content here.
 ## 🛠️ Technology Stack
 
 - **Frontend**: HTML5, CSS3, Vanilla JavaScript (ES6+)
-- **Libraries**: MathJax 3, jsPDF, html2canvas, JSZip
-- **Backend**: Python/Flask with SQLite, rate limiting (flask-limiter)
+- **Libraries**: PDF.js, CodeMirror, JSZip
+- **Backend**: Python/Flask, pypdf, SQLite, and rate limiting (flask-limiter)
+- **Compiler**: TeX Live with latexmk, pdfLaTeX, XeLaTeX, and LuaLaTeX
 - **Database**: SQLite (bind-mounted to host filesystem)
 - **Container**: Docker with nginx (reverse proxy + CSP headers)
 
@@ -182,6 +186,14 @@ LATEX_EDITOR_DATA=/path/to/your/data
 
 The storage path is visible in the projects drawer footer.
 
+Compilation defaults can also be changed in `.env`:
+
+```bash
+COMPILE_TIMEOUT_SECONDS=60
+MAX_REQUEST_BYTES=36700160
+MAX_COMPILE_BYTES=26214400
+```
+
 ## 📁 Project Structure
 
 ```
@@ -192,9 +204,9 @@ latex-editor/
 │   ├── app.js          # Application logic + project management + GitHub folder sync
 │   └── nginx.conf      # Web server config + CSP headers
 ├── backend/            # Flask API + SQLite project storage
-│   ├── app.py          # API endpoints (health, documents, projects)
-│   ├── test_app.py     # 54 tests (health, documents, projects, GitHub metadata)
-│   ├── Dockerfile      # Backend container with /data volume
+│   ├── app.py          # API endpoints, project storage, and isolated TeX compilation
+│   ├── test_app.py     # Backend API and compiler validation tests
+│   ├── Dockerfile      # Backend container with TeX Live and /data volume
 │   └── requirements.txt
 ├── docker-compose.yml  # Container orchestration with backend-data volume
 ├── CONTRIBUTING.md     # Contribution guidelines
@@ -222,8 +234,9 @@ Found a vulnerability? See [SECURITY.md](SECURITY.md) for reporting guidelines.
 
 ### Security Features
 
-- **XSS Prevention**: All user-controlled LaTeX content is HTML-escaped before rendering
-- **Sandboxed Preview**: Preview iframe uses `sandbox="allow-scripts"` — isolated from the parent page
+- **Exact PDF Rendering**: PDF.js renders compiler output instead of executing generated HTML
+- **Restricted Compilation**: Project paths are validated, latexmk rc files and shell escape
+  are disabled, and compiles run as a non-root user with time and memory limits
 - **Content Security Policy**: Nginx enforces CSP headers restricting script/style sources
 - **Rate Limiting**: Backend API endpoints are rate-limited via flask-limiter
 - **Input Validation**: Request body size limits, document count caps, filename sanitization

@@ -1,6 +1,7 @@
 """
 Backend API Tests
 """
+import base64
 import os
 import sqlite3
 import tempfile
@@ -118,13 +119,149 @@ class TestCompileEndpoint:
         """Compile endpoint should require latex field"""
         response = client.post("/api/v1/compile", json={"other": "data"})
         assert response.status_code == 400
-    
-    def test_compile_accepts_latex(self, client):
-        """Compile endpoint should accept valid latex"""
-        response = client.post("/api/v1/compile", json={"latex": "\\documentclass{article}"})
+
+    def test_compile_accepts_latex(self, client, monkeypatch):
+        """Compile endpoint should return the generated PDF."""
+        captured = {}
+
+        def fake_compile(files, main_file, engine):
+            captured.update({
+                "files": files,
+                "main_file": main_file,
+                "engine": engine,
+            })
+            return b"%PDF-1.7\ncompiled", 1, 42, ""
+
+        monkeypatch.setattr(app_module, "_compile_latex_project", fake_compile)
+        response = client.post(
+            "/api/v1/compile",
+            json={"latex": "\\documentclass{article}"},
+        )
+
         assert response.status_code == 200
+        assert response.mimetype == "application/pdf"
+        assert response.data.startswith(b"%PDF")
+        assert response.headers["X-Page-Count"] == "1"
+        assert response.headers["X-Compile-Time-Ms"] == "42"
+        assert captured == {
+            "files": {"document.tex": b"\\documentclass{article}"},
+            "main_file": "document.tex",
+            "engine": "xelatex",
+        }
+
+    def test_compile_accepts_multifile_project(self, client, monkeypatch):
+        captured = {}
+
+        def fake_compile(files, main_file, engine):
+            captured.update({
+                "files": files,
+                "main_file": main_file,
+                "engine": engine,
+            })
+            return b"%PDF-1.7\ncompiled", 2, 100, ""
+
+        monkeypatch.setattr(app_module, "_compile_latex_project", fake_compile)
+        response = client.post("/api/v1/compile", json={
+            "main_file": "resume.tex",
+            "engine": "lualatex",
+            "files": {
+                "resume.tex": "\\input{cv/skills.tex}",
+                "cv/skills.tex": "Skills",
+                "font.ttf": {
+                    "isBinary": True,
+                    "content": base64.b64encode(b"font data").decode("ascii"),
+                },
+            },
+        })
+
+        assert response.status_code == 200
+        assert captured["main_file"] == "resume.tex"
+        assert captured["engine"] == "lualatex"
+        assert captured["files"]["font.ttf"] == b"font data"
+
+    @pytest.mark.parametrize("payload", [
+        {
+            "main_file": "../main.tex",
+            "files": {"../main.tex": "\\documentclass{article}"},
+        },
+        {
+            "main_file": "main.tex",
+            "files": {"main.tex": "\\documentclass{article}"},
+            "engine": "unknown",
+        },
+        {
+            "main_file": "main.tex",
+            "files": {
+                "main.tex": "\\documentclass{article}",
+                "font.ttf": {"isBinary": True, "content": "not base64!"},
+            },
+        },
+        {
+            "main_file": "missing.tex",
+            "files": {"main.tex": "\\documentclass{article}"},
+        },
+    ])
+    def test_compile_rejects_invalid_projects(self, client, payload):
+        response = client.post("/api/v1/compile", json=payload)
+        assert response.status_code == 400
+        assert "error" in response.get_json()
+
+    def test_compile_returns_latex_errors(self, client, monkeypatch):
+        monkeypatch.setattr(
+            app_module,
+            "_compile_latex_project",
+            lambda *_: (_ for _ in ()).throw(
+                app_module.LatexCompilationFailed(
+                    "main.tex:12: Undefined control sequence."
+                )
+            ),
+        )
+
+        response = client.post(
+            "/api/v1/compile",
+            json={"latex": "\\badcommand"},
+        )
+
+        assert response.status_code == 422
         data = response.get_json()
-        assert data["status"] == "success"
+        assert data["error"] == "LaTeX compilation failed"
+        assert data["errors"] == [{
+            "file": "main.tex",
+            "line": 12,
+            "message": "Undefined control sequence.",
+        }]
+
+    def test_compile_timeout_returns_504(self, client, monkeypatch):
+        monkeypatch.setattr(
+            app_module,
+            "_compile_latex_project",
+            lambda *_: (_ for _ in ()).throw(
+                app_module.LatexCompilationTimedOut()
+            ),
+        )
+
+        response = client.post(
+            "/api/v1/compile",
+            json={"latex": "\\documentclass{article}"},
+        )
+
+        assert response.status_code == 504
+        assert (
+            f"{app_module.COMPILE_TIMEOUT_SECONDS}-second limit"
+            in response.get_json()["error"]
+        )
+
+    def test_latexmk_command_disables_project_rc_and_shell_escape(self, monkeypatch):
+        monkeypatch.setattr(app_module.shutil, "which", lambda name: f"/usr/bin/{name}")
+        command = app_module._build_latexmk_command("xelatex", "resume.tex")
+
+        assert "-norc" in command
+        assert "-xelatex" in command
+        assert any(
+            part.startswith("-xelatex=") and "-no-shell-escape" in part
+            for part in command
+        )
+        assert command[-1] == "resume.tex"
 
 
 class TestDocumentsEndpoint:
@@ -359,10 +496,11 @@ class TestInputValidation:
         })
         assert response.status_code == 413
 
-    def test_compile_rejects_oversized_latex(self, client):
+    def test_compile_rejects_oversized_latex(self, client, monkeypatch):
         """POST /api/v1/compile should reject oversized LaTeX content"""
+        monkeypatch.setattr(app_module, "MAX_COMPILE_BYTES", 10)
         response = client.post("/api/v1/compile", json={
-            "latex": "x" * (1024 * 1024 + 1)
+            "latex": "x" * 11
         })
         assert response.status_code == 413
 
@@ -402,8 +540,34 @@ class TestProjectsCRUD:
         data = response.get_json()
         assert data["name"] == "My Resume"
         assert data["main_file"] == "main.tex"
+        assert data["engine"] == "xelatex"
         assert data["file_count"] == 2
         assert "main.tex" in data["files"]
+
+    def test_create_and_update_project_engine(self, client):
+        create = client.post("/api/v1/projects", json={
+            "name": "EngineTest",
+            "engine": "lualatex",
+            "files": {"main.tex": "content"},
+        })
+        assert create.status_code == 201
+        project = create.get_json()
+        assert project["engine"] == "lualatex"
+
+        update = client.put(f"/api/v1/projects/{project['id']}", json={
+            "engine": "pdflatex",
+        })
+        assert update.status_code == 200
+        assert update.get_json()["engine"] == "pdflatex"
+
+    def test_rejects_invalid_project_engine(self, client):
+        response = client.post("/api/v1/projects", json={
+            "name": "InvalidEngine",
+            "engine": "latex",
+            "files": {"main.tex": "content"},
+        })
+        assert response.status_code == 400
+        assert "Unsupported LaTeX engine" in response.get_json()["error"]
 
     def test_unique_project_name(self, client):
         """POST /api/v1/projects rejects duplicate names"""
@@ -667,6 +831,7 @@ class TestProjectGithubLink:
             os.unlink(db_path)
 
         assert {
+            "engine",
             "github_repo",
             "github_path",
             "github_branch",

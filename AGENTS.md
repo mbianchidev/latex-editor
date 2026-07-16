@@ -4,23 +4,25 @@ This document provides technical information for developers working on latex-edi
 
 ## Project Overview
 
-latex-editor is an open source LaTeX editor with real-time preview capabilities, designed as an alternative to Overleaf without compilation limits. The goal is to provide a free, unlimited, and user-friendly LaTeX editing experience that can be self-hosted or used directly in the browser.
+latex-editor is an open source LaTeX editor with compiler-accurate PDF preview, designed as
+a self-hostable alternative to Overleaf without compile quotas.
 
 ## Technology Stack
 
-### Frontend (Planned)
+### Frontend
 
-* **Framework**: Modern JavaScript framework (React, Vue, or Svelte)
-* **Editor Component**: Monaco Editor or CodeMirror for LaTeX editing
-* **LaTeX Rendering**: KaTeX or MathJax for mathematical typesetting
-* **Build Tool**: Vite or Webpack for bundling
-* **Styling**: CSS Modules or Tailwind CSS
+* **Framework**: Vanilla JavaScript, HTML, and CSS
+* **Editor Component**: CodeMirror
+* **PDF Rendering**: PDF.js
+* **Project Archives**: JSZip
+* **Web Server**: nginx
 
-### Backend (Planned)
+### Backend
 
-* **LaTeX Compiler**: Integration with LaTeX compilers (pdfTeX, XeTeX, LuaTeX)
-* **File System**: Local or cloud storage for documents
-* **API**: RESTful API for document management
+* **Framework**: Python and Flask
+* **LaTeX Compiler**: latexmk with pdfLaTeX, XeLaTeX, and LuaLaTeX
+* **Storage**: SQLite with binary project files stored as Base64
+* **API**: RESTful project management and PDF compilation
 * **Real-time Sync**: WebSockets for collaborative editing (future feature)
 
 ### Development Tools
@@ -197,7 +199,7 @@ describe('LaTeX Parser', () => {
 });
 ```
 
-## API Design (Future)
+## API Design
 
 ### REST Endpoints
 
@@ -207,28 +209,30 @@ POST   /api/documents           # Create new document
 GET    /api/documents/:id       # Get document by ID
 PUT    /api/documents/:id       # Update document
 DELETE /api/documents/:id       # Delete document
-POST   /api/compile             # Compile LaTeX to PDF
+POST   /api/v1/compile          # Compile a LaTeX project to PDF
 ```
 
 ### Request/Response Format
 
-Use JSON for all API communication:
+Compilation requests use JSON and successful responses contain raw PDF bytes:
 
 ```javascript
 // Request
-POST /api/compile
+POST /api/v1/compile
 {
-  "latex": "\\documentclass{article}...",
-  "engine": "pdflatex"
+  "files": {
+    "resume.tex": "\\documentclass{article}...",
+    "font.ttf": {
+      "isBinary": true,
+      "content": "base64-encoded-file-data"
+    }
+  },
+  "main_file": "resume.tex",
+  "engine": "xelatex"
 }
 
-// Response
-{
-  "success": true,
-  "pdf": "base64-encoded-pdf-data",
-  "logs": ["Compilation log messages"],
-  "errors": []
-}
+// Response: application/pdf
+// Headers include X-Page-Count, X-Compile-Time-Ms, and X-LaTeX-Engine.
 ```
 
 ## Security Considerations

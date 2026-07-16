@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Professional LaTeX editor with live PDF preview. Open source, no compilation limits, client-side processing.">
+    <meta name="description" content="Professional LaTeX editor with exact compiled PDF preview. Open source and self-hostable.">
     <meta name="keywords" content="LaTeX, editor, PDF, preview, typesetting, mathematics, academic">
     <title>LaTeX Editor - Professional Document Editing</title>
     
@@ -17,23 +17,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.css" 
           integrity="sha512-uf06llspW44/LZpHzHT6qBOIVODjWtv4MxCricRxkzvopAlSWnTf6hpZTFxuuZcuNE9CBQhqE0Seu1CoRk84nQ==" 
           crossorigin="anonymous" referrerpolicy="no-referrer">
-    
-    <!-- MathJax for mathematical equations -->
-    <script>
-      MathJax = {
-        tex: {
-          inlineMath: [['$', '$'], ['\\(', '\\)']],
-          displayMath: [['$$', '$$'], ['\\[', '\\]']],
-          processEscapes: true,
-          processEnvironments: true
-        },
-        options: {
-          skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre']
-        }
-      };
-    </script>
-    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-    
+
     <!-- JSZip for ZIP file handling -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" 
             integrity="sha512-XMVd28F1oH/O71fzwBnV7HucLxVwtxf26XV8P4wPk26EDxuGZ91N8bsOttmnomcCD3CS5ZMRL50H0GgOHvegtg==" 
@@ -141,6 +125,14 @@
                 <div class="panel-header">
                     <h2 class="panel-title" id="currentFileName">LaTeX Source</h2>
                     <div class="panel-actions">
+                        <label class="engine-control" for="engineSelect">
+                            <span>Engine</span>
+                            <select id="engineSelect" aria-label="LaTeX engine">
+                                <option value="xelatex">XeLaTeX</option>
+                                <option value="pdflatex">pdfLaTeX</option>
+                                <option value="lualatex">LuaLaTeX</option>
+                            </select>
+                        </label>
                         <button class="icon-btn" id="toggleFileTree" title="Show file tree" style="display: none;">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -437,11 +429,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/stex/stex.min.js" 
             integrity="sha512-YJhRJtlj8qI8w/UrL7wX2ysIIDFFGLGkeCJOJh6RiCYWqIe3Xo4fEevUC6LoTp2uPrOzxRkmgGUwH8Aze41usA==" 
             crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" 
-            integrity="sha512-qZvrmS2ekKPF2mSznTQsxqPgnpkI4DNTlrdUmTzrDgektczlKNRRhy5X5AAOnx5S09ydFYWWNSfcEqDTTHgtNA==" 
-            crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" 
-            integrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu+Wgds8Gp/gU33kqBtgNS4tSPHuGibyoeqMV/TJlSKda6FXzoEyYGjTe+vXA==" 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+            integrity="sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcbZK34nLaR3cAeYSJshoxIOq3mjEf7xJE8YWIUHMn+oCQ=="
             crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="app.js"></script>
 </body>
