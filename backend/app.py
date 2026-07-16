@@ -271,6 +271,13 @@ def _validate_latex_engine(engine):
     return engine
 
 
+def _pdf_download_name(main_file):
+    """Return a conservative ASCII filename for the compiled PDF header."""
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(main_file).stem)
+    stem = stem.strip("._-")[:100] or "document"
+    return f"{stem}.pdf"
+
+
 def _validate_github_branch(branch):
     """Validate the subset of Git reference rules needed for branch names."""
     if not isinstance(branch, str):
@@ -737,16 +744,13 @@ def compile_latex():
             main_file,
             engine,
         )
-    except OverflowError as error:
-        return jsonify({"error": str(error)}), 413
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
+    except OverflowError:
+        return jsonify({"error": "LaTeX project exceeds the compile size limit"}), 413
+    except ValueError:
+        return jsonify({"error": "Invalid LaTeX compile request"}), 400
     except LatexCompilerUnavailable as error:
         app.logger.error("LaTeX compiler unavailable: %s", error)
-        return jsonify({
-            "error": "LaTeX compiler is unavailable",
-            "details": str(error),
-        }), 503
+        return jsonify({"error": "LaTeX compiler is unavailable"}), 503
     except LatexCompilationTimedOut:
         return jsonify({
             "error": (
@@ -764,7 +768,7 @@ def compile_latex():
     response = app.response_class(pdf_bytes, mimetype="application/pdf")
     response.headers["Cache-Control"] = "no-store"
     response.headers["Content-Disposition"] = (
-        f'inline; filename="{Path(main_file).stem}.pdf"'
+        f'inline; filename="{_pdf_download_name(main_file)}"'
     )
     response.headers["X-Compile-Time-Ms"] = str(elapsed_ms)
     response.headers["X-LaTeX-Engine"] = engine
@@ -913,8 +917,8 @@ def create_project():
 
     try:
         engine = _validate_latex_engine(data.get("engine"))
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
+    except ValueError:
+        return jsonify({"error": "Unsupported LaTeX engine"}), 400
 
     try:
         github = _validate_github_link(data.get("github"))
@@ -1018,8 +1022,8 @@ def update_project(project_id):
     if "engine" in data:
         try:
             engine = _validate_latex_engine(data["engine"])
-        except ValueError as error:
-            return jsonify({"error": str(error)}), 400
+        except ValueError:
+            return jsonify({"error": "Unsupported LaTeX engine"}), 400
 
     if github_provided:
         try:

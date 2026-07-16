@@ -179,6 +179,24 @@ class TestCompileEndpoint:
         assert captured["engine"] == "lualatex"
         assert captured["files"]["font.ttf"] == b"font data"
 
+    def test_compile_sanitizes_download_filename(self, client, monkeypatch):
+        monkeypatch.setattr(
+            app_module,
+            "_compile_latex_project",
+            lambda *_: (b"%PDF-1.7\ncompiled", 1, 5, ""),
+        )
+        main_file = 'resume"; attachment=evil.tex'
+
+        response = client.post("/api/v1/compile", json={
+            "main_file": main_file,
+            "files": {main_file: "\\documentclass{article}"},
+        })
+
+        assert response.status_code == 200
+        assert response.headers["Content-Disposition"] == (
+            'inline; filename="resume-attachment-evil.pdf"'
+        )
+
     @pytest.mark.parametrize("payload", [
         {
             "main_file": "../main.tex",

@@ -86,7 +86,8 @@ const state = {
   pdfDocument: null,
   pdfRenderGeneration: 0,
   pageCount: 0,
-  lastCompileSignature: null,
+  sourceRevision: 0,
+  compiledRevision: -1,
   zoom: 1.0,
   isCompiling: false,
   compileGeneration: 0,
@@ -308,6 +309,10 @@ function setLatexEngine(engine) {
   if (elements.engineSelect) {
     elements.engineSelect.value = state.engine;
   }
+}
+
+function markCompileDirty() {
+  state.sourceRevision++;
 }
 
 // ============================================
@@ -648,6 +653,7 @@ function initializeEventListeners() {
   elements.compileBtn.addEventListener('click', () => compile());
   elements.engineSelect.addEventListener('change', () => {
     setLatexEngine(elements.engineSelect.value);
+    markCompileDirty();
     saveToLocalStorage();
     scheduleBackendSave();
     showStatus('Changes not compiled', 'info');
@@ -793,6 +799,7 @@ function handleEditorChange(e) {
     return;
   }
   state.currentLatex = e.target.value;
+  markCompileDirty();
   
   // Update project file if in project mode
   if (state.projectMode && state.currentFile) {
@@ -852,22 +859,26 @@ async function compile(isInitial = false) {
 
   try {
     const request = createCompileRequest();
-    const signature = JSON.stringify(request);
+    const sourceRevision = state.sourceRevision;
     const result = await compileLatexProject(request);
 
     // Stale check — a newer compile was triggered while we were working
     if (generation !== state.compileGeneration) return false;
-    if (JSON.stringify(createCompileRequest()) !== signature) {
+    if (sourceRevision !== state.sourceRevision) {
       showStatus('Changes not compiled', 'info');
       return false;
     }
 
     state.pdfData = result.pdf;
-    state.lastCompileSignature = signature;
+    state.compiledRevision = sourceRevision;
     state.lastCompileTime = result.compileTime || (Date.now() - startTime);
     state.pageCount = result.pageCount;
 
     await renderPDF(result.pdf, generation);
+    if (sourceRevision !== state.sourceRevision) {
+      showStatus('Changes not compiled', 'info');
+      return false;
+    }
 
     const pageLabel = `${state.pageCount} page${state.pageCount === 1 ? '' : 's'}`;
     showStatus(
@@ -955,7 +966,7 @@ async function compileLatexProject(requestPayload) {
 
 function clearPreview(errors, compileLog = '') {
   state.pdfData = null;
-  state.lastCompileSignature = null;
+  state.compiledRevision = -1;
   state.pageCount = 0;
   state.pdfRenderGeneration++;
   if (state.pdfDocument) {
@@ -1044,6 +1055,9 @@ async function renderPDFPages(generation = state.compileGeneration) {
     const viewport = page.getViewport({ scale: previewScale });
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d', { alpha: false });
+    if (!context) {
+      throw new Error('The browser could not allocate a PDF rendering canvas');
+    }
     canvas.className = 'pdf-page';
     canvas.setAttribute('aria-label', `PDF page ${pageNumber}`);
     canvas.width = Math.floor(viewport.width * outputScale);
@@ -1084,8 +1098,7 @@ function setZoom(newZoom) {
 
 async function downloadPDF() {
   try {
-    const currentSignature = JSON.stringify(createCompileRequest());
-    if (!state.pdfData || state.lastCompileSignature !== currentSignature) {
+    if (!state.pdfData || state.compiledRevision !== state.sourceRevision) {
       const compiled = await compile();
       if (!compiled) return;
     }
@@ -1203,6 +1216,7 @@ Start writing your document here.
   state.currentFile = 'main.tex';
   state.projectMode = true;
   state.currentLatex = mainContent;
+  markCompileDirty();
 
   elements.editor.value = mainContent;
   elements.editor.readOnly = false;
@@ -1289,6 +1303,7 @@ This is your new LaTeX project. Edit this file or create new sections.
   state.currentFile = 'main.tex';
   state.projectMode = true;
   state.currentLatex = mainContent;
+  markCompileDirty();
 
   elements.editor.value = mainContent;
   elements.editor.readOnly = false;
@@ -1749,6 +1764,7 @@ function restoreProject(project, options = {}) {
   state.projectFilesIncomplete = false;
   setLatexEngine(project.engine);
   setProjectGithubLink(project.github);
+  markCompileDirty();
 
   const fileContent = state.projectFiles[state.mainFile];
   if (isBinaryContent(fileContent)) {
@@ -1801,6 +1817,7 @@ function loadProjectFromLocalStorage() {
     state.projectFilesIncomplete = Boolean(projectData.binaryFilesStripped);
     setLatexEngine(projectData.engine);
     setProjectGithubLink(projectData.github);
+    markCompileDirty();
     
     // Load current file content
     const fileContent = state.projectFiles[state.currentFile];
@@ -2045,6 +2062,7 @@ function cleanCurrentProject() {
     buildFileTree(state.projectFiles);
     saveProjectToLocalStorage();
     scheduleBackendSave();
+    markCompileDirty();
     showSuccessToast(`Cleaned ${removedCount} macOS/system files`);
   } else {
     showSuccessToast('Project is already clean!');
@@ -2210,6 +2228,7 @@ async function handleZipUpload(event) {
     state.mainFile = mainTexFile;
     state.currentFile = mainTexFile;
     state.projectMode = true;
+    markCompileDirty();
     
     // Update UI
     elements.currentFileName.textContent = mainTexFile.split('/').pop();
@@ -2666,6 +2685,7 @@ async function addNewFile(parentPath) {
   }
   
   state.projectFiles[newPath] = content;
+  markCompileDirty();
   
   // Rebuild file tree
   buildFileTree(state.projectFiles);
@@ -2701,6 +2721,7 @@ async function addNewFolder(parentPath) {
   }
   
   state.projectFiles[placeholderPath] = '';
+  markCompileDirty();
   
   // Rebuild file tree
   buildFileTree(state.projectFiles);
@@ -2750,6 +2771,7 @@ async function renameFile(oldPath) {
   if (state.mainFile === oldPath) {
     state.mainFile = newPath;
   }
+  markCompileDirty();
   
   // Rebuild file tree
   buildFileTree(state.projectFiles);
@@ -2818,6 +2840,7 @@ async function renameFolder(oldPath) {
       state.mainFile = newFilePath;
     }
   }
+  markCompileDirty();
   
   // Rebuild file tree
   buildFileTree(state.projectFiles);
@@ -2842,6 +2865,7 @@ async function deleteFile(path) {
   }
   
   delete state.projectFiles[path];
+  markCompileDirty();
   
   // If deleted file was current, switch to main file
   if (state.currentFile === path) {
@@ -2889,6 +2913,7 @@ async function deleteFolder(path) {
       elements.currentFileName.textContent = state.mainFile ? state.mainFile.split('/').pop() : 'LaTeX Source';
     }
   }
+  markCompileDirty();
   
   // Rebuild file tree
   buildFileTree(state.projectFiles);
@@ -2905,6 +2930,7 @@ async function deleteFolder(path) {
  */
 function setAsMainFile(path) {
   state.mainFile = path;
+  markCompileDirty();
   showSuccessToast(`${path.split('/').pop()} is now the main file`);
   
   // Rebuild file tree to update visual indication
