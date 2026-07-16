@@ -6,7 +6,7 @@ import sqlite3
 import tempfile
 import pytest
 import app as app_module
-from app import app, documents, documents_lock, MAX_DOCUMENTS, DB_PATH
+from app import app, documents, documents_lock, MAX_DOCUMENTS
 
 
 @pytest.fixture

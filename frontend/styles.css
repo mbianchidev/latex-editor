@@ -1487,6 +1487,7 @@ button {
   grid-column: 1 / -1;
 }
 .github-linked-source {
+  display: flex;
   align-items: center;
   gap: 0.75rem;
   padding: 0.8rem;
