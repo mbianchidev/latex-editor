@@ -14,6 +14,7 @@ a self-hostable alternative to Overleaf without compile quotas.
 * **Framework**: Vanilla JavaScript, HTML, and CSS
 * **Editor Component**: CodeMirror
 * **PDF Rendering**: PDF.js
+* **Source Diagnostics**: Lightweight browser-side warnings with Node unit tests
 * **Project Archives**: JSZip
 * **Web Server**: nginx
 

@@ -93,6 +93,9 @@ const state = {
   compileGeneration: 0,
   engine: DEFAULT_LATEX_ENGINE,
   lastCompileTime: 0,
+  autoCompile: false,
+  autoCompilePending: false,
+  syntaxWarnings: [],
   // Multi-file project support
   projectFiles: {},
   currentFile: null,
@@ -124,6 +127,7 @@ const elements = {
   previewContainer: document.getElementById('previewContainer'),
   compileBtn: document.getElementById('compileBtn'),
   engineSelect: document.getElementById('engineSelect'),
+  autoCompile: document.getElementById('autoCompile'),
   newDocBtn: document.getElementById('newDoc'),
   downloadPdfBtn: document.getElementById('downloadPdf'),
   downloadTexBtn: document.getElementById('downloadTex'),
@@ -133,6 +137,8 @@ const elements = {
   zoomOutBtn: document.getElementById('zoomOut'),
   zoomLevel: document.getElementById('zoomLevel'),
   statusText: document.getElementById('statusText'),
+  syntaxWarnings: document.getElementById('syntaxWarnings'),
+  syntaxWarningPanel: document.getElementById('syntaxWarningPanel'),
   lineCol: document.getElementById('lineCol'),
   loadingOverlay: document.getElementById('loadingOverlay'),
   loadingText: document.getElementById('loadingText'),
@@ -313,6 +319,32 @@ function setLatexEngine(engine) {
 
 function markCompileDirty() {
   state.sourceRevision++;
+  scheduleAutoCompile();
+}
+
+function setAutoCompile(enabled, options = {}) {
+  const { persist = true, schedule = true } = options;
+  state.autoCompile = Boolean(enabled);
+  elements.autoCompile.checked = state.autoCompile;
+  if (persist) {
+    try {
+      localStorage.setItem('latexEditor_autoCompile', String(state.autoCompile));
+    } catch (error) {
+      console.error('Failed to save auto-compile setting:', error);
+    }
+  }
+  if (state.autoCompile && schedule && state.compiledRevision !== state.sourceRevision) {
+    scheduleAutoCompile();
+  } else if (!state.autoCompile) {
+    cancelAutoCompile();
+  }
+}
+
+function setEditorContent(content, readOnly = false) {
+  state.currentLatex = content || '';
+  elements.editor.value = state.currentLatex;
+  elements.editor.readOnly = readOnly;
+  scheduleSyntaxWarnings(0);
 }
 
 // ============================================
@@ -338,8 +370,7 @@ async function init() {
   
   initializeEditor();
   
-  state.currentLatex = DEFAULT_TEMPLATE;
-  elements.editor.value = DEFAULT_TEMPLATE;
+  setEditorContent(DEFAULT_TEMPLATE);
   elements.engineSelect.value = state.engine;
   
   initializeEventListeners();
@@ -351,6 +382,10 @@ async function init() {
   if (savedZoom) setZoom(parseFloat(savedZoom));
   const savedEngine = localStorage.getItem('latexEditor_engine');
   if (savedEngine) setLatexEngine(savedEngine);
+  setAutoCompile(
+    localStorage.getItem('latexEditor_autoCompile') === 'true',
+    { persist: false, schedule: false }
+  );
 
   // Always load projects from the backend (authoritative source)
   let restored = false;
@@ -369,8 +404,7 @@ async function init() {
     try {
       const savedContent = localStorage.getItem('latexEditor_content');
       if (savedContent && savedContent !== DEFAULT_TEMPLATE) {
-        state.currentLatex = savedContent;
-        elements.editor.value = savedContent;
+        setEditorContent(savedContent);
         restored = true;
       }
     } catch (e) { /* ignore */ }
@@ -584,7 +618,7 @@ function applyAutocomplete(item) {
   textarea.value = before + insertion + after;
   textarea.selectionStart = textarea.selectionEnd = autocompleteState.startPos + cursorOffset;
 
-  state.currentLatex = textarea.value;
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
   hideAutocomplete();
   textarea.focus();
 }
@@ -657,6 +691,20 @@ function initializeEventListeners() {
     saveToLocalStorage();
     scheduleBackendSave();
     showStatus('Changes not compiled', 'info');
+  });
+  elements.autoCompile.addEventListener('change', () => {
+    setAutoCompile(elements.autoCompile.checked);
+  });
+  elements.syntaxWarnings.addEventListener('click', () => {
+    const shouldOpen = elements.syntaxWarningPanel.hidden;
+    elements.syntaxWarningPanel.hidden = !shouldOpen;
+    elements.syntaxWarnings.setAttribute('aria-expanded', String(shouldOpen));
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !elements.syntaxWarningPanel.hidden) {
+      closeSyntaxWarningPanel();
+      elements.syntaxWarnings.focus();
+    }
   });
   
   // New project button (replaces old dropdown)
@@ -808,10 +856,13 @@ function handleEditorChange(e) {
   
   saveToLocalStorage();
   scheduleBackendSave();
+  scheduleSyntaxWarnings();
   scheduleDirtyStatus();
 }
 
 let _dirtyStatusTimer = null;
+let _syntaxWarningTimer = null;
+let _autoCompileTimer = null;
 
 function scheduleDirtyStatus() {
   if (_dirtyStatusTimer) clearTimeout(_dirtyStatusTimer);
@@ -820,6 +871,120 @@ function scheduleDirtyStatus() {
       showStatus('Changes not compiled', 'info');
     }
   }, 400);
+}
+
+function scheduleSyntaxWarnings(delay = 150) {
+  if (_syntaxWarningTimer) clearTimeout(_syntaxWarningTimer);
+  _syntaxWarningTimer = setTimeout(updateSyntaxWarnings, delay);
+}
+
+function updateSyntaxWarnings() {
+  _syntaxWarningTimer = null;
+  state.syntaxWarnings = (
+    !elements.editor.readOnly
+    && window.LatexWarnings?.findLatexWarnings
+  )
+    ? window.LatexWarnings.findLatexWarnings(state.currentLatex)
+    : [];
+  renderSyntaxWarnings();
+}
+
+function renderSyntaxWarnings() {
+  const warnings = state.syntaxWarnings;
+  elements.syntaxWarningPanel.replaceChildren();
+
+  if (warnings.length === 0) {
+    elements.syntaxWarnings.hidden = true;
+    closeSyntaxWarningPanel();
+    return;
+  }
+
+  const firstWarning = warnings[0];
+  const warningLabel = `${warnings.length} warning${warnings.length === 1 ? '' : 's'}`;
+  elements.syntaxWarnings.hidden = false;
+  elements.syntaxWarnings.textContent = `${warningLabel}: ${firstWarning.message}`;
+  elements.syntaxWarnings.title = warnings
+    .map(warning => `Line ${warning.line}: ${warning.message}`)
+    .join('\n');
+  elements.syntaxWarnings.setAttribute(
+    'aria-label',
+    `${warningLabel}. ${firstWarning.message}`
+  );
+
+  for (const warning of warnings) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'syntax-warning-item';
+    item.textContent = `Line ${warning.line}, column ${warning.column}: ${warning.message}`;
+    item.addEventListener('click', () => {
+      focusEditorWarning(warning);
+      closeSyntaxWarningPanel();
+    });
+    elements.syntaxWarningPanel.appendChild(item);
+  }
+}
+
+function closeSyntaxWarningPanel() {
+  elements.syntaxWarningPanel.hidden = true;
+  elements.syntaxWarnings.setAttribute('aria-expanded', 'false');
+}
+
+function focusEditorWarning(warning) {
+  const lines = state.currentLatex.split('\n');
+  let offset = 0;
+  for (let index = 0; index < warning.line - 1; index++) {
+    offset += lines[index].length + 1;
+  }
+  offset += Math.max(0, warning.column - 1);
+  elements.editor.focus();
+  elements.editor.setSelectionRange(offset, offset + 1);
+  updateCursorPosition();
+}
+
+function cancelAutoCompile() {
+  if (_autoCompileTimer) {
+    clearTimeout(_autoCompileTimer);
+    _autoCompileTimer = null;
+  }
+  state.autoCompilePending = false;
+}
+
+function scheduleAutoCompile(delay = 1000) {
+  if (_autoCompileTimer) {
+    clearTimeout(_autoCompileTimer);
+    _autoCompileTimer = null;
+  }
+
+  if (
+    !state.autoCompile
+    || state.projectSwitchInProgress
+    || state.githubSyncInProgress
+    || elements.editor.readOnly
+  ) {
+    state.autoCompilePending = false;
+    return;
+  }
+
+  state.autoCompilePending = true;
+  const scheduledRevision = state.sourceRevision;
+  _autoCompileTimer = setTimeout(async () => {
+    _autoCompileTimer = null;
+    if (
+      !state.autoCompile
+      || state.projectSwitchInProgress
+      || state.githubSyncInProgress
+      || scheduledRevision !== state.sourceRevision
+    ) {
+      state.autoCompilePending = false;
+      return;
+    }
+    if (state.isCompiling) {
+      return;
+    }
+
+    state.autoCompilePending = false;
+    await compile(true);
+  }, delay);
 }
 
 function updateCursorPosition() {
@@ -842,6 +1007,8 @@ async function compile(isInitial = false) {
     return false;
   }
 
+  cancelAutoCompile();
+  updateSyntaxWarnings();
   state.isCompiling = true;
   state.compileGeneration++;
   const generation = state.compileGeneration;
@@ -904,6 +1071,14 @@ async function compile(isInitial = false) {
     clearTimeout(loadingTimer);
     state.isCompiling = false;
     hideLoading();
+    if (
+      state.autoCompile
+      && state.autoCompilePending
+      && !_autoCompileTimer
+      && state.compiledRevision !== state.sourceRevision
+    ) {
+      scheduleAutoCompile(0);
+    }
   }
 }
 
@@ -1145,6 +1320,9 @@ function downloadTeX() {
 // ============================================
 
 function setProjectSwitchInProgress(inProgress) {
+  if (inProgress) {
+    cancelAutoCompile();
+  }
   state.projectSwitchInProgress = inProgress;
   elements.fileTree.style.pointerEvents = inProgress ? 'none' : '';
   if (elements.newDocBtn) {
@@ -1215,11 +1393,9 @@ Start writing your document here.
   state.mainFile = 'main.tex';
   state.currentFile = 'main.tex';
   state.projectMode = true;
-  state.currentLatex = mainContent;
+  setEditorContent(mainContent);
   markCompileDirty();
 
-  elements.editor.value = mainContent;
-  elements.editor.readOnly = false;
   elements.currentFileName.textContent = 'main.tex';
 
   buildFileTree(state.projectFiles);
@@ -1302,11 +1478,9 @@ This is your new LaTeX project. Edit this file or create new sections.
   state.mainFile = 'main.tex';
   state.currentFile = 'main.tex';
   state.projectMode = true;
-  state.currentLatex = mainContent;
+  setEditorContent(mainContent);
   markCompileDirty();
 
-  elements.editor.value = mainContent;
-  elements.editor.readOnly = false;
   elements.currentFileName.textContent = 'main.tex';
 
   buildFileTree(state.projectFiles);
@@ -1584,6 +1758,7 @@ function saveToLocalStorage() {
     localStorage.setItem('latexEditor_content', state.currentLatex);
     localStorage.setItem('latexEditor_zoom', state.zoom.toString());
     localStorage.setItem('latexEditor_engine', state.engine);
+    localStorage.setItem('latexEditor_autoCompile', String(state.autoCompile));
     
     // If in project mode, also save the project
     if (state.projectMode) {
@@ -1695,8 +1870,7 @@ function loadFromLocalStorage() {
     // Fall back to simple document only if there's no project to restore
     const savedContent = localStorage.getItem('latexEditor_content');
     if (savedContent && savedContent !== DEFAULT_TEMPLATE) {
-      state.currentLatex = savedContent;
-      elements.editor.value = savedContent;
+      setEditorContent(savedContent);
       return true;
     }
 
@@ -1768,13 +1942,10 @@ function restoreProject(project, options = {}) {
 
   const fileContent = state.projectFiles[state.mainFile];
   if (isBinaryContent(fileContent)) {
-    state.currentLatex = `[Binary file: ${state.mainFile}]`;
-    elements.editor.readOnly = true;
+    setEditorContent(`[Binary file: ${state.mainFile}]`, true);
   } else {
-    state.currentLatex = fileContent || '';
-    elements.editor.readOnly = false;
+    setEditorContent(fileContent || '');
   }
-  elements.editor.value = state.currentLatex;
   elements.currentFileName.textContent = state.mainFile
     ? state.mainFile.split('/').pop()
     : 'LaTeX Source';
@@ -1822,13 +1993,10 @@ function loadProjectFromLocalStorage() {
     // Load current file content
     const fileContent = state.projectFiles[state.currentFile];
     if (isBinaryContent(fileContent)) {
-      state.currentLatex = `[Binary file: ${state.currentFile}]`;
-      elements.editor.readOnly = true;
+      setEditorContent(`[Binary file: ${state.currentFile}]`, true);
     } else {
-      state.currentLatex = fileContent || '';
-      elements.editor.readOnly = false;
+      setEditorContent(fileContent || '');
     }
-    elements.editor.value = state.currentLatex;
     elements.currentFileName.textContent = state.currentFile ? state.currentFile.split('/').pop() : 'LaTeX Source';
     
     // Build and show file tree
@@ -2047,8 +2215,7 @@ function cleanCurrentProject() {
     if (state.currentFile && !state.projectFiles[state.currentFile]) {
       state.currentFile = state.mainFile;
       if (state.mainFile && state.projectFiles[state.mainFile]) {
-        state.currentLatex = state.projectFiles[state.mainFile];
-        elements.editor.value = state.currentLatex;
+        setEditorContent(state.projectFiles[state.mainFile]);
         elements.currentFileName.textContent = state.mainFile.split('/').pop();
       }
     }
@@ -2232,8 +2399,7 @@ async function handleZipUpload(event) {
     
     // Update UI
     elements.currentFileName.textContent = mainTexFile.split('/').pop();
-    elements.editor.value = files[mainTexFile];
-    state.currentLatex = files[mainTexFile];
+    setEditorContent(files[mainTexFile]);
     
     // Build and show file tree
     buildFileTree(files);
@@ -2486,13 +2652,9 @@ function openFile(path, itemElement) {
       previewMessage = `[Font file: ${path.split('/').pop()}]\\n\\nFont files cannot be edited.\\nThe file will be included in your ZIP export.`;
     }
     
-    state.currentLatex = previewMessage;
-    elements.editor.value = previewMessage;
-    elements.editor.readOnly = true;
+    setEditorContent(previewMessage, true);
   } else {
-    state.currentLatex = fileContent;
-    elements.editor.value = fileContent;
-    elements.editor.readOnly = false;
+    setEditorContent(fileContent);
   }
   
   elements.currentFileName.textContent = path.split('/').pop();
@@ -2870,8 +3032,7 @@ async function deleteFile(path) {
   // If deleted file was current, switch to main file
   if (state.currentFile === path) {
     state.currentFile = state.mainFile;
-    state.currentLatex = state.projectFiles[state.mainFile] || '';
-    elements.editor.value = state.currentLatex;
+    setEditorContent(state.projectFiles[state.mainFile] || '');
     elements.currentFileName.textContent = state.mainFile ? state.mainFile.split('/').pop() : 'LaTeX Source';
   }
   
@@ -2908,8 +3069,7 @@ async function deleteFolder(path) {
     
     if (state.currentFile === filePath) {
       state.currentFile = state.mainFile;
-      state.currentLatex = state.projectFiles[state.mainFile] || '';
-      elements.editor.value = state.currentLatex;
+      setEditorContent(state.projectFiles[state.mainFile] || '');
       elements.currentFileName.textContent = state.mainFile ? state.mainFile.split('/').pop() : 'LaTeX Source';
     }
   }
@@ -3816,6 +3976,7 @@ async function runGithubOperation(label, operation) {
     return;
   }
 
+  cancelAutoCompile();
   state.githubSyncInProgress = true;
   clearTimeout(_backendSaveTimer);
   refreshGithubModal();

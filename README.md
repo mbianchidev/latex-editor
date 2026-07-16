@@ -18,6 +18,8 @@ self-hostable and without compile quotas.
 - **SQLite Persistence**: Projects stored in a SQLite database on the backend (survives container restarts)
 - **GitHub Folder Sync**: Import a repository folder, pull updates, and commit edits back
 - **Syntax Highlighting**: Full LaTeX syntax highlighting for easier editing
+- **Syntax Warnings**: Flag likely literal `%`/`&` mistakes and unmatched braces without blocking TeX
+- **Optional Auto-Compile**: Compile one second after editing stops
 - **File Management**: Add, rename, and delete files directly in the browser
 - **Free & Open Source**: No paywalls, no subscriptions, no restrictions
 - **Self-Hostable**: Run it locally with Docker or deploy to your own server
@@ -116,6 +118,13 @@ remain unchanged. Protected branches require a writable branch.
 XeLaTeX is the default and is required by projects that use `fontspec`, such as
 `russell.cls` CVs. The selected engine is stored per project.
 
+Enable **Auto** beside the engine selector to compile one second after the latest edit. The
+preference is stored in the browser and remains off by default.
+
+The status bar also shows non-blocking warnings for likely literal percent signs such as `100%`,
+ampersands outside alignment environments, and unmatched `{` or `}`. Escape literal special
+characters as `\%` and `\&`. Click the warning summary to inspect and jump to a warning.
+
 ## 📝 LaTeX Examples
 
 ### Basic Document
@@ -201,6 +210,8 @@ latex-editor/
 ├── frontend/           # Main application
 │   ├── index.html      # HTML structure + project drawer + GitHub modal
 │   ├── styles.css      # Design system + drawer/modal styles
+│   ├── latex-warnings.js # Lightweight non-blocking source diagnostics
+│   ├── test-warnings.js  # Node tests for source diagnostics
 │   ├── app.js          # Application logic + project management + GitHub folder sync
 │   └── nginx.conf      # Web server config + CSP headers
 ├── backend/            # Flask API + SQLite project storage

@@ -55,8 +55,10 @@ jobs:
         run: |
           test -f frontend/index.html
           test -f frontend/styles.css
+          test -f frontend/latex-warnings.js
           test -f frontend/app.js
           test -f frontend/nginx.conf
+          node frontend/test-warnings.js
           echo "All frontend files present"
 
   docker-build:

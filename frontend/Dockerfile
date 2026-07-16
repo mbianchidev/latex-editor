@@ -6,6 +6,7 @@ COPY nginx.conf /etc/nginx/nginx.conf
 # Copy frontend files
 COPY index.html /usr/share/nginx/html/
 COPY styles.css /usr/share/nginx/html/
+COPY latex-warnings.js /usr/share/nginx/html/
 COPY app.js /usr/share/nginx/html/
 
 # Create non-root user (nginx image handles this internally)

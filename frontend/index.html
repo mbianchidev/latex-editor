@@ -133,6 +133,10 @@
                                 <option value="lualatex">LuaLaTeX</option>
                             </select>
                         </label>
+                        <label class="auto-compile-control" title="Compile 1 second after editing stops">
+                            <input type="checkbox" id="autoCompile">
+                            <span>Auto</span>
+                        </label>
                         <button class="icon-btn" id="toggleFileTree" title="Show file tree" style="display: none;">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -148,9 +152,14 @@
                 <div class="editor-container" style="position: relative;">
                     <textarea id="editor" spellcheck="false"></textarea>
                     <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
+                    <div class="syntax-warning-panel" id="syntaxWarningPanel"
+                         role="region" aria-label="LaTeX warnings" hidden></div>
                 </div>
                 <div class="status-bar">
                     <span class="status-item" id="statusText">Ready</span>
+                    <button class="status-warning" id="syntaxWarnings" type="button"
+                            aria-controls="syntaxWarningPanel" aria-expanded="false"
+                            aria-live="polite" hidden></button>
                     <span class="status-item" id="lineCol">Line 1, Col 1</span>
                 </div>
             </div>
@@ -432,6 +441,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
             integrity="sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcbZK34nLaR3cAeYSJshoxIOq3mjEf7xJE8YWIUHMn+oCQ=="
             crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="latex-warnings.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
