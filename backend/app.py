@@ -408,27 +408,53 @@ def _validate_github_proxy_request(data):
             raise ValueError("GitHub API method is not allowed")
         return path, method, None
 
-    match = re.match(
-        r"^/repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?P<suffix>.*)$",
-        parsed.path,
-    )
-    if not match:
+    path_segments = parsed.path.split("/")
+    if len(path_segments) < 4 or path_segments[1] != "repos":
         raise ValueError("GitHub API path is not allowed")
-    suffix = match.group("suffix")
+    owner, repo = path_segments[2:4]
+    allowed_repo_characters = set(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-"
+    )
+    if (
+        not owner
+        or not repo
+        or len(owner) > 39
+        or len(repo) > 100
+        or not owner[0].isalnum()
+        or any(char not in allowed_repo_characters for char in owner)
+        or any(char not in allowed_repo_characters for char in repo)
+        or any(not segment for segment in path_segments[4:])
+    ):
+        raise ValueError("GitHub API path is not allowed")
+    suffix = "".join(f"/{segment}" for segment in path_segments[4:])
+
+    def is_sha_path(prefix):
+        sha = suffix.removeprefix(prefix)
+        return (
+            suffix.startswith(prefix)
+            and len(sha) == 40
+            and all(char in "0123456789abcdefABCDEF" for char in sha)
+        )
 
     allowed = False
     if method == "GET":
         allowed = (
             suffix == ""
-            or re.fullmatch(r"/git/ref/heads/.+", suffix) is not None
-            or re.fullmatch(r"/git/commits/[0-9a-fA-F]{40}", suffix) is not None
-            or re.fullmatch(r"/git/trees/[0-9a-fA-F]{40}", suffix) is not None
-            or re.fullmatch(r"/git/blobs/[0-9a-fA-F]{40}", suffix) is not None
+            or (
+                suffix.startswith("/git/ref/heads/")
+                and len(suffix) > len("/git/ref/heads/")
+            )
+            or is_sha_path("/git/commits/")
+            or is_sha_path("/git/trees/")
+            or is_sha_path("/git/blobs/")
         )
     elif method == "POST":
         allowed = suffix in {"/git/blobs", "/git/trees", "/git/commits"}
     elif method == "PATCH":
-        allowed = re.fullmatch(r"/git/refs/heads/.+", suffix) is not None
+        allowed = (
+            suffix.startswith("/git/refs/heads/")
+            and len(suffix) > len("/git/refs/heads/")
+        )
     if not allowed:
         raise ValueError("GitHub API path is not allowed")
     if method == "GET" and body is not None:

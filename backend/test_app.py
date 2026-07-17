@@ -326,6 +326,14 @@ class TestGithubTokenEndpoint:
             "path": "/repos/owner/repo/git/trees/" + ("a" * 40) + "?other=1",
             "method": "GET",
         },
+        {
+            "path": "/repos/owner/repo/git/ref/heads//main",
+            "method": "GET",
+        },
+        {
+            "path": "/repos/-/-" + ("--" * 500),
+            "method": "GET",
+        },
     ])
     def test_rejects_disallowed_proxy_request(self, client, payload):
         response = client.post("/api/v1/github", json=payload)
