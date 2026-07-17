@@ -3,6 +3,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    container_name: latex-editor-frontend
     ports:
       - "${LATEX_EDITOR_PORT:-80}:80"
     depends_on:
@@ -22,6 +23,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    container_name: latex-editor-backend
     expose:
       - "5000"
     environment:
