@@ -197,32 +197,52 @@ class TestCompileEndpoint:
             'inline; filename="resume-attachment-evil.pdf"'
         )
 
-    @pytest.mark.parametrize("payload", [
-        {
-            "main_file": "../main.tex",
-            "files": {"../main.tex": "\\documentclass{article}"},
-        },
-        {
-            "main_file": "main.tex",
-            "files": {"main.tex": "\\documentclass{article}"},
-            "engine": "unknown",
-        },
-        {
-            "main_file": "main.tex",
-            "files": {
-                "main.tex": "\\documentclass{article}",
-                "font.ttf": {"isBinary": True, "content": "not base64!"},
+    @pytest.mark.parametrize(("payload", "expected_details"), [
+        (
+            {
+                "main_file": "../main.tex",
+                "files": {"../main.tex": "\\documentclass{article}"},
             },
-        },
-        {
-            "main_file": "missing.tex",
-            "files": {"main.tex": "\\documentclass{article}"},
-        },
+            "Project file paths must be safe normalized relative paths.",
+        ),
+        (
+            {
+                "main_file": "main.tex",
+                "files": {"main.tex": "\\documentclass{article}"},
+                "engine": "unknown",
+            },
+            "Choose pdflatex, xelatex, or lualatex.",
+        ),
+        (
+            {
+                "main_file": "main.tex",
+                "files": {
+                    "main.tex": "\\documentclass{article}",
+                    "font.ttf": {"isBinary": True, "content": "not base64!"},
+                },
+            },
+            "Binary project files must contain valid Base64 text.",
+        ),
+        (
+            {
+                "main_file": "missing.tex",
+                "files": {"main.tex": "\\documentclass{article}"},
+            },
+            "The selected main file is not present in the project.",
+        ),
     ])
-    def test_compile_rejects_invalid_projects(self, client, payload):
+    def test_compile_rejects_invalid_projects(
+        self,
+        client,
+        payload,
+        expected_details,
+    ):
         response = client.post("/api/v1/compile", json=payload)
         assert response.status_code == 400
-        assert "error" in response.get_json()
+        assert response.get_json() == {
+            "error": "Invalid LaTeX compile request",
+            "details": expected_details,
+        }
 
     def test_compile_returns_latex_errors(self, client, monkeypatch):
         monkeypatch.setattr(

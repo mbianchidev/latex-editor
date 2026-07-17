@@ -210,6 +210,31 @@ GITHUB_REPO_PATTERN = re.compile(
 GITHUB_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 GITHUB_FILE_MODES = {"100644", "100755", "120000"}
 GITHUB_BRANCH_FORBIDDEN = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]")
+COMPILE_REQUEST_DETAILS = {
+    "invalid_body": "The request body must be a non-empty JSON object.",
+    "invalid_files": "'files' must map project paths to file contents.",
+    "invalid_latex": "'latex' must be a string.",
+    "missing_source": "Provide either a 'files' project or a 'latex' source string.",
+    "invalid_path": "Project file paths must be safe normalized relative paths.",
+    "unsupported_engine": "Choose pdflatex, xelatex, or lualatex.",
+    "empty_project": "At least one project file is required.",
+    "too_many_files": f"Projects may contain at most {MAX_COMPILE_FILES} files.",
+    "duplicate_path": "Project file paths must be unique.",
+    "invalid_binary": "Binary project files must contain valid Base64 text.",
+    "unsupported_content": "Project files must contain text or Base64 binary content.",
+    "missing_main": "The selected main file is not present in the project.",
+    "invalid_main_extension": "The selected main file must use the .tex extension.",
+    "binary_main": "The selected main file must be a text file.",
+    "path_conflict": "A project path conflicts with another file or directory.",
+}
+
+
+class CompileRequestError(ValueError):
+    """Raised for client-correctable compile request validation failures."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
 
 
 def _validate_relative_path(path, allow_empty=False):
@@ -237,7 +262,7 @@ def _validate_relative_path(path, allow_empty=False):
 def _validate_compile_path(path):
     """Validate a normalized POSIX path inside an isolated compile directory."""
     if not isinstance(path, str):
-        raise ValueError("Project file paths must be strings")
+        raise CompileRequestError("invalid_path")
     if (
         not path
         or len(path) > 1024
@@ -245,7 +270,7 @@ def _validate_compile_path(path):
         or path.endswith("/")
         or "\\" in path
     ):
-        raise ValueError("Project file paths must be relative and normalized")
+        raise CompileRequestError("invalid_path")
 
     segments = path.split("/")
     if any(
@@ -254,7 +279,7 @@ def _validate_compile_path(path):
         or any(ord(char) < 32 or ord(char) == 127 for char in segment)
         for segment in segments
     ):
-        raise ValueError("Project file path contains an unsafe segment")
+        raise CompileRequestError("invalid_path")
     return path
 
 
@@ -441,35 +466,38 @@ class LatexCompilationTimedOut(Exception):
 def _normalize_compile_request(data):
     """Validate a compile payload and return decoded project files."""
     if not isinstance(data, dict) or not data:
-        raise ValueError("Request body must be a JSON object")
+        raise CompileRequestError("invalid_body")
 
     if "files" in data:
         files = data["files"]
         if not isinstance(files, dict):
-            raise ValueError("'files' must be an object mapping paths to contents")
+            raise CompileRequestError("invalid_files")
         main_file = data.get("main_file", "main.tex")
     elif "latex" in data:
         latex = data["latex"]
         if not isinstance(latex, str):
-            raise ValueError("'latex' field must be a string")
+            raise CompileRequestError("invalid_latex")
         main_file = data.get("main_file", "document.tex")
         files = {main_file: latex}
     else:
-        raise ValueError("Provide either 'files' or 'latex'")
+        raise CompileRequestError("missing_source")
 
     main_file = _validate_compile_path(main_file)
-    engine = _validate_latex_engine(data.get("engine"))
+    try:
+        engine = _validate_latex_engine(data.get("engine"))
+    except ValueError as error:
+        raise CompileRequestError("unsupported_engine") from error
     if not files:
-        raise ValueError("At least one project file is required")
+        raise CompileRequestError("empty_project")
     if len(files) > MAX_COMPILE_FILES:
-        raise ValueError(f"Project exceeds the {MAX_COMPILE_FILES}-file compile limit")
+        raise CompileRequestError("too_many_files")
 
     decoded_files = {}
     total_bytes = 0
     for raw_path, value in files.items():
         path = _validate_compile_path(raw_path)
         if path in decoded_files:
-            raise ValueError(f"Duplicate project file path: {path}")
+            raise CompileRequestError("duplicate_path")
 
         if isinstance(value, str):
             content = value.encode("utf-8")
@@ -478,16 +506,16 @@ def _normalize_compile_request(data):
         ):
             encoded = value.get("content", "")
             if not isinstance(encoded, str):
-                raise ValueError(f"Binary file '{path}' must contain Base64 text")
+                raise CompileRequestError("invalid_binary")
             try:
                 content = base64.b64decode(
                     "".join(encoded.split()),
                     validate=True,
                 )
             except (binascii.Error, ValueError) as error:
-                raise ValueError(f"Binary file '{path}' contains invalid Base64") from error
+                raise CompileRequestError("invalid_binary") from error
         else:
-            raise ValueError(f"Project file '{path}' has unsupported content")
+            raise CompileRequestError("unsupported_content")
 
         total_bytes += len(content)
         if total_bytes > MAX_COMPILE_BYTES:
@@ -497,11 +525,11 @@ def _normalize_compile_request(data):
         decoded_files[path] = content
 
     if main_file not in decoded_files:
-        raise ValueError("The selected main file is not present in the project")
+        raise CompileRequestError("missing_main")
     if not main_file.lower().endswith(".tex"):
-        raise ValueError("The selected main file must use the .tex extension")
+        raise CompileRequestError("invalid_main_extension")
     if not isinstance(files[main_file], str):
-        raise ValueError("The selected main file must be a text file")
+        raise CompileRequestError("binary_main")
     return decoded_files, main_file, engine
 
 
@@ -513,10 +541,10 @@ def _write_compile_files(root, files):
             if parent == root:
                 break
             if parent.exists() and not parent.is_dir():
-                raise ValueError(f"Project path conflicts with another file: {path}")
+                raise CompileRequestError("path_conflict")
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists() and destination.is_dir():
-            raise ValueError(f"Project path conflicts with another file: {path}")
+            raise CompileRequestError("path_conflict")
         destination.write_bytes(content)
 
 
@@ -746,8 +774,15 @@ def compile_latex():
         )
     except OverflowError:
         return jsonify({"error": "LaTeX project exceeds the compile size limit"}), 413
-    except ValueError:
-        return jsonify({"error": "Invalid LaTeX compile request"}), 400
+    except CompileRequestError as error:
+        details = COMPILE_REQUEST_DETAILS.get(
+            error.code,
+            "Review the project files and compile settings.",
+        )
+        return jsonify({
+            "error": "Invalid LaTeX compile request",
+            "details": details,
+        }), 400
     except LatexCompilerUnavailable as error:
         app.logger.error("LaTeX compiler unavailable: %s", error)
         return jsonify({"error": "LaTeX compiler is unavailable"}), 503

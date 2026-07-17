@@ -1118,9 +1118,12 @@ async function compileLatexProject(requestPayload) {
 
   if (!response.ok) {
     const details = await response.json().catch(() => ({}));
-    const error = new Error(details.error || `Compilation failed with HTTP ${response.status}`);
+    const summary = details.error || `Compilation failed with HTTP ${response.status}`;
+    const error = new Error(
+      details.details ? `${summary}: ${details.details}` : summary
+    );
     error.compileErrors = details.errors || [];
-    error.compileLog = details.log || details.details || '';
+    error.compileLog = details.log || '';
     throw error;
   }
 
@@ -1227,27 +1230,31 @@ async function renderPDFPages(generation = state.compileGeneration) {
     }
 
     const page = await state.pdfDocument.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: previewScale });
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d', { alpha: false });
-    if (!context) {
-      throw new Error('The browser could not allocate a PDF rendering canvas');
-    }
-    canvas.className = 'pdf-page';
-    canvas.setAttribute('aria-label', `PDF page ${pageNumber}`);
-    canvas.width = Math.floor(viewport.width * outputScale);
-    canvas.height = Math.floor(viewport.height * outputScale);
-    canvas.style.width = `${Math.floor(viewport.width)}px`;
-    canvas.style.height = `${Math.floor(viewport.height)}px`;
-    elements.previewContent.appendChild(canvas);
+    try {
+      const viewport = page.getViewport({ scale: previewScale });
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d', { alpha: false });
+      if (!context) {
+        throw new Error('The browser could not allocate a PDF rendering canvas');
+      }
+      canvas.className = 'pdf-page';
+      canvas.setAttribute('aria-label', `PDF page ${pageNumber}`);
+      canvas.width = Math.floor(viewport.width * outputScale);
+      canvas.height = Math.floor(viewport.height * outputScale);
+      canvas.style.width = `${Math.floor(viewport.width)}px`;
+      canvas.style.height = `${Math.floor(viewport.height)}px`;
+      elements.previewContent.appendChild(canvas);
 
-    await page.render({
-      canvasContext: context,
-      viewport,
-      transform: outputScale === 1
-        ? null
-        : [outputScale, 0, 0, outputScale, 0, 0],
-    }).promise;
+      await page.render({
+        canvasContext: context,
+        viewport,
+        transform: outputScale === 1
+          ? null
+          : [outputScale, 0, 0, outputScale, 0, 0],
+      }).promise;
+    } finally {
+      page.cleanup();
+    }
   }
 }
 
