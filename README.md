@@ -51,6 +51,14 @@ docker compose up -d
 The backend image includes TeX Live, so the first no-cache build downloads a larger toolchain
 than a typical Flask image.
 
+Compose generates project-scoped container names, so separate checkouts do not collide. If
+another service already uses port 80, choose another host port:
+
+```bash
+LATEX_EDITOR_PORT=8080 docker compose up -d
+# Open http://localhost:8080
+```
+
 ## 📖 User Guide
 
 ### Interface Overview
