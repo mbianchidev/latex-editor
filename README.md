@@ -4,22 +4,26 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Code of Conduct](https://img.shields.io/badge/Code%20of%20Conduct-Contributor%20Covenant-blue.svg)](CODE_OF_CONDUCT.md)
 
-A free, open source LaTeX editor with real-time preview capabilities. Think Overleaf, but without compilation limits, completely free, and self-hostable.
+A free, open source LaTeX editor with compiler-accurate PDF preview. Think Overleaf, but
+self-hostable and without compile quotas.
 
 ## ✨ Features
 
-- **Real-time Preview**: See your LaTeX document rendered as you type (optional auto-compile)
-- **No Compilation Limits**: Compile as many documents as you want, whenever you want
+- **Exact PDF Preview**: Preview the PDF produced by the selected TeX engine
+- **Preview/Export Parity**: PDF export downloads the same compiled bytes shown in preview
+- **No Compile Quotas**: Compile whenever you want within configurable safety limits
 - **Multi-file Projects**: Upload ZIP files with multiple .tex files, images, and fonts
 - **CV/Resume Support**: Full rendering of CV-class documents (russell.cls) with sections, entries, skills tables
 - **Project Management**: Save, open, rename, and delete projects from a sidebar drawer
 - **SQLite Persistence**: Projects stored in a SQLite database on the backend (survives container restarts)
 - **GitHub Folder Sync**: Import a repository folder, pull updates, and commit edits back
 - **Syntax Highlighting**: Full LaTeX syntax highlighting for easier editing
+- **Syntax Warnings**: Flag likely literal `%`/`&` mistakes and unmatched braces without blocking TeX
+- **Optional Auto-Compile**: Compile one second after editing stops
 - **File Management**: Add, rename, and delete files directly in the browser
 - **Free & Open Source**: No paywalls, no subscriptions, no restrictions
 - **Self-Hostable**: Run it locally with Docker or deploy to your own server
-- **Client-side Processing**: LaTeX-to-HTML rendering happens in your browser
+- **Multiple TeX Engines**: Choose pdfLaTeX, XeLaTeX, or LuaLaTeX per project
 
 ## 🚀 Quick Start
 
@@ -44,12 +48,20 @@ docker compose up -d
 # Open http://localhost in your browser
 ```
 
-### Manual Setup
+The backend image includes TeX Live, so the first no-cache build downloads a larger toolchain
+than a typical Flask image.
+
+The services use the stable container names `latex-editor-frontend` and
+`latex-editor-backend`. Stop and delete the stack, including obsolete Compose services, with:
 
 ```bash
-# Serve the frontend folder with any static server
-cd frontend
-python3 -m http.server 8080
+docker compose down --remove-orphans
+```
+
+If another service already uses port 80, choose another host port:
+
+```bash
+LATEX_EDITOR_PORT=8080 docker compose up -d
 # Open http://localhost:8080
 ```
 
@@ -62,8 +74,8 @@ python3 -m http.server 8080
 | **Header Bar** | Projects drawer, new document, upload ZIP, download .tex/.zip/PDF buttons |
 | **Projects Drawer** (left slide-in) | Manage saved projects — open, rename, delete, GitHub settings |
 | **File Tree** (left) | Shown when a ZIP project is loaded — manage files here |
-| **Editor** (center-left) | Write your LaTeX code with syntax highlighting |
-| **Preview** (right) | Live rendered preview of your document |
+| **Editor** (center-left) | Write LaTeX and select the project compiler |
+| **Preview** (right) | The actual compiled PDF, rendered page by page |
 | **Status Bar** | Compilation status and cursor position |
 
 ### Keyboard Shortcuts
@@ -94,24 +106,40 @@ python3 -m http.server 8080
 
 1. Click **New** → **Import GitHub Folder**, or open **Projects** → **GitHub Settings**
 2. Enter a fine-grained GitHub Personal Access Token with repository `Contents`
-   read and write access. The token is kept in the current browser tab only.
+   read and write access. The backend validates it, encrypts it, and stores only ciphertext
+   in SQLite.
 3. Enter the repository (`owner/repo`), folder (`resume`), and optional branch.
    Leaving the branch blank uses the repository default branch.
 4. Click **Import folder**. The folder becomes a local project and keeps its GitHub
    source link.
 5. Use **Pull latest** to replace the local project with the current linked folder.
-6. Use **Commit changes** to create a commit directly on the linked branch. If the
+6. Use **Commit** in the main project header or **Commit changes** in GitHub Settings
+   to create a commit directly on the linked branch. If the
    branch changed since the last import or pull, the editor stops and asks you to pull
    first instead of overwriting remote work.
 
 Only files inside the linked folder are managed. Files elsewhere in the repository
 remain unchanged. Protected branches require a writable branch.
 
-### Auto-Compile Toggle
+### Compilation and PDF Export
 
-The "Auto" checkbox controls automatic compilation:
-- **Off (default)**: Manual compile only - click ▶ or press `Ctrl+Enter`
-- **On**: Auto-compile 3 seconds after you stop typing
+1. Select the same engine you use for standalone builds.
+2. Click ▶ or press `Ctrl+Enter`.
+3. The complete project is compiled with `latexmk`; includes, classes, images, and fonts are
+   resolved by TeX rather than approximated as HTML.
+4. The status bar reports the exact page count.
+5. PDF export downloads that compiled PDF directly. If the source changed after the last
+   compile, export recompiles first.
+
+XeLaTeX is the default and is required by projects that use `fontspec`, such as
+`russell.cls` CVs. The selected engine is stored per project.
+
+Enable **Auto** beside the engine selector to compile one second after the latest edit. The
+preference is stored in the browser and remains off by default.
+
+The status bar also shows non-blocking warnings for likely literal percent signs such as `100%`,
+ampersands outside alignment environments, and unmatched `{` or `}`. Escape literal special
+characters as `\%` and `\&`. Click the warning summary to inspect and jump to a warning.
 
 ## 📝 LaTeX Examples
 
@@ -162,8 +190,9 @@ Your content here.
 ## 🛠️ Technology Stack
 
 - **Frontend**: HTML5, CSS3, Vanilla JavaScript (ES6+)
-- **Libraries**: MathJax 3, jsPDF, html2canvas, JSZip
-- **Backend**: Python/Flask with SQLite, rate limiting (flask-limiter)
+- **Libraries**: PDF.js, CodeMirror, JSZip
+- **Backend**: Python/Flask, pypdf, cryptography, SQLite, and rate limiting (flask-limiter)
+- **Compiler**: TeX Live with latexmk, pdfLaTeX, XeLaTeX, and LuaLaTeX
 - **Database**: SQLite (bind-mounted to host filesystem)
 - **Container**: Docker with nginx (reverse proxy + CSP headers)
 
@@ -182,6 +211,20 @@ LATEX_EDITOR_DATA=/path/to/your/data
 
 The storage path is visible in the projects drawer footer.
 
+The GitHub PAT is encrypted before it is stored in SQLite, and GitHub API calls are proxied by
+the backend so the saved PAT is never returned to the browser. For stronger separation from
+database backups, set `GITHUB_TOKEN_ENCRYPTION_KEY` in `.env`. Without it, the app generates a
+`0600` key file beside the database; copying the whole data directory copies both the encrypted
+PAT and its key.
+
+Compilation defaults can also be changed in `.env`:
+
+```bash
+COMPILE_TIMEOUT_SECONDS=60
+MAX_REQUEST_BYTES=36700160
+MAX_COMPILE_BYTES=26214400
+```
+
 ## 📁 Project Structure
 
 ```
@@ -189,12 +232,14 @@ latex-editor/
 ├── frontend/           # Main application
 │   ├── index.html      # HTML structure + project drawer + GitHub modal
 │   ├── styles.css      # Design system + drawer/modal styles
+│   ├── latex-warnings.js # Lightweight non-blocking source diagnostics
+│   ├── test-warnings.js  # Node tests for source diagnostics
 │   ├── app.js          # Application logic + project management + GitHub folder sync
 │   └── nginx.conf      # Web server config + CSP headers
 ├── backend/            # Flask API + SQLite project storage
-│   ├── app.py          # API endpoints (health, documents, projects)
-│   ├── test_app.py     # 54 tests (health, documents, projects, GitHub metadata)
-│   ├── Dockerfile      # Backend container with /data volume
+│   ├── app.py          # API endpoints, project storage, and isolated TeX compilation
+│   ├── test_app.py     # Backend API and compiler validation tests
+│   ├── Dockerfile      # Backend container with TeX Live and /data volume
 │   └── requirements.txt
 ├── docker-compose.yml  # Container orchestration with backend-data volume
 ├── CONTRIBUTING.md     # Contribution guidelines
@@ -222,8 +267,9 @@ Found a vulnerability? See [SECURITY.md](SECURITY.md) for reporting guidelines.
 
 ### Security Features
 
-- **XSS Prevention**: All user-controlled LaTeX content is HTML-escaped before rendering
-- **Sandboxed Preview**: Preview iframe uses `sandbox="allow-scripts"` — isolated from the parent page
+- **Exact PDF Rendering**: PDF.js renders compiler output instead of executing generated HTML
+- **Restricted Compilation**: Project paths are validated, latexmk rc files and shell escape
+  are disabled, and compiles run as a non-root user with time and memory limits
 - **Content Security Policy**: Nginx enforces CSP headers restricting script/style sources
 - **Rate Limiting**: Backend API endpoints are rate-limited via flask-limiter
 - **Input Validation**: Request body size limits, document count caps, filename sanitization

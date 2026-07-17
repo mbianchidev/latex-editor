@@ -67,6 +67,16 @@ When contributing to this project, please:
 * Keep dependencies up to date
 * Run security linters and scanners before submitting PRs
 
+## GitHub PAT Storage
+
+GitHub PATs are encrypted with Fernet before being stored in SQLite. Set
+`GITHUB_TOKEN_ENCRYPTION_KEY` to keep the encryption key separate from the database volume.
+When this variable is unset, latex-editor creates a `0600` key file beside `projects.db`.
+
+**A backup or copy of the complete data directory contains both the encrypted PAT and the
+generated key.** Use an environment-provided key when the data volume may be copied, shared,
+or backed up outside the trusted host.
+
 ## Disclosure Policy
 
 * We follow a coordinated disclosure model

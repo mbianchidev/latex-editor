@@ -55,8 +55,10 @@ jobs:
         run: |
           test -f frontend/index.html
           test -f frontend/styles.css
+          test -f frontend/latex-warnings.js
           test -f frontend/app.js
           test -f frontend/nginx.conf
+          node frontend/test-warnings.js
           echo "All frontend files present"
 
   docker-build:
@@ -77,8 +79,7 @@ jobs:
           context: ./backend
           push: false
           tags: latex-editor-backend:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          no-cache: true
 
       - name: Build frontend image
         uses: docker/build-push-action@v5
@@ -86,8 +87,7 @@ jobs:
           context: ./frontend
           push: false
           tags: latex-editor-frontend:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          no-cache: true
 
   docker-compose-test:
     name: Docker Compose Integration
@@ -102,7 +102,7 @@ jobs:
         run: mkdir -p ~/.latex-editor/data
 
       - name: Start services
-        run: docker compose up -d --build
+        run: docker compose build --no-cache && docker compose up -d
 
       - name: Wait for services to be healthy
         run: |
@@ -136,6 +136,33 @@ jobs:
           done
           echo "Frontend check failed"
           exit 1
+
+      - name: Compile a real PDF
+        run: |
+          python3 - <<'PY'
+          import json
+          import urllib.request
+
+          payload = json.dumps({
+              "latex": (
+                  "\\documentclass{article}"
+                  "\\begin{document}"
+                  "Preview/export parity"
+                  "\\end{document}"
+              ),
+              "engine": "xelatex",
+          }).encode()
+          request = urllib.request.Request(
+              "http://localhost:80/api/v1/compile",
+              data=payload,
+              headers={"Content-Type": "application/json"},
+          )
+          with urllib.request.urlopen(request, timeout=90) as response:
+              pdf = response.read()
+              assert response.headers["Content-Type"].startswith("application/pdf")
+              assert response.headers["X-Page-Count"] == "1"
+              assert pdf.startswith(b"%PDF-")
+          PY
 
       - name: Show logs on failure
         if: failure()

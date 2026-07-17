@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Professional LaTeX editor with live PDF preview. Open source, no compilation limits, client-side processing.">
+    <meta name="description" content="Professional LaTeX editor with exact compiled PDF preview. Open source and self-hostable.">
     <meta name="keywords" content="LaTeX, editor, PDF, preview, typesetting, mathematics, academic">
     <title>LaTeX Editor - Professional Document Editing</title>
     
@@ -17,23 +17,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.css" 
           integrity="sha512-uf06llspW44/LZpHzHT6qBOIVODjWtv4MxCricRxkzvopAlSWnTf6hpZTFxuuZcuNE9CBQhqE0Seu1CoRk84nQ==" 
           crossorigin="anonymous" referrerpolicy="no-referrer">
-    
-    <!-- MathJax for mathematical equations -->
-    <script>
-      MathJax = {
-        tex: {
-          inlineMath: [['$', '$'], ['\\(', '\\)']],
-          displayMath: [['$$', '$$'], ['\\[', '\\]']],
-          processEscapes: true,
-          processEnvironments: true
-        },
-        options: {
-          skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre']
-        }
-      };
-    </script>
-    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-    
+
     <!-- JSZip for ZIP file handling -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" 
             integrity="sha512-XMVd28F1oH/O71fzwBnV7HucLxVwtxf26XV8P4wPk26EDxuGZ91N8bsOttmnomcCD3CS5ZMRL50H0GgOHvegtg==" 
@@ -79,6 +63,19 @@
                         <line x1="12" y1="15" x2="12" y2="3"/>
                     </svg>
                     ZIP
+                </button>
+                <button class="btn btn-secondary" id="commitGithubBtn"
+                        title="Commit project changes to GitHub" style="display: none;">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2">
+                        <circle cx="6" cy="5" r="2"/>
+                        <circle cx="18" cy="6" r="2"/>
+                        <circle cx="6" cy="19" r="2"/>
+                        <path d="M6 7v10"/>
+                        <path d="M8 7.5c4.5 0 3.5 5 8 5"/>
+                        <path d="M16 10.5l2 2-2 2"/>
+                    </svg>
+                    Commit
                 </button>
                 <button class="btn btn-primary" id="downloadPdf" title="Download PDF">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -141,6 +138,18 @@
                 <div class="panel-header">
                     <h2 class="panel-title" id="currentFileName">LaTeX Source</h2>
                     <div class="panel-actions">
+                        <label class="engine-control" for="engineSelect">
+                            <span>Engine</span>
+                            <select id="engineSelect" aria-label="LaTeX engine">
+                                <option value="xelatex">XeLaTeX</option>
+                                <option value="pdflatex">pdfLaTeX</option>
+                                <option value="lualatex">LuaLaTeX</option>
+                            </select>
+                        </label>
+                        <label class="auto-compile-control" title="Compile 1 second after editing stops">
+                            <input type="checkbox" id="autoCompile">
+                            <span>Auto</span>
+                        </label>
                         <button class="icon-btn" id="toggleFileTree" title="Show file tree" style="display: none;">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -156,9 +165,14 @@
                 <div class="editor-container" style="position: relative;">
                     <textarea id="editor" spellcheck="false"></textarea>
                     <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
+                    <div class="syntax-warning-panel" id="syntaxWarningPanel"
+                         role="region" aria-label="LaTeX warnings" hidden></div>
                 </div>
                 <div class="status-bar">
                     <span class="status-item" id="statusText">Ready</span>
+                    <button class="status-warning" id="syntaxWarnings" type="button"
+                            aria-controls="syntaxWarningPanel" aria-expanded="false"
+                            aria-live="polite" hidden></button>
                     <span class="status-item" id="lineCol">Line 1, Col 1</span>
                 </div>
             </div>
@@ -302,7 +316,7 @@
                 <div class="form-group">
                     <label for="githubToken">Personal Access Token (PAT)</label>
                     <input type="password" id="githubToken" class="form-input" placeholder="ghp_xxxxxxxxxxxx" autocomplete="off">
-                    <small class="form-hint">Use a fine-grained token scoped to the target repository with <code>Contents</code> read and write access. The token stays in this browser tab.</small>
+                    <small class="form-hint">Use a fine-grained token scoped to the target repository with <code>Contents</code> read and write access. The backend encrypts it before storing it in the local SQLite database.</small>
                 </div>
                 <div id="githubStatus" class="github-status"></div>
                 <div class="form-group" id="githubRepoGroup" style="display:none;">
@@ -437,12 +451,10 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/stex/stex.min.js" 
             integrity="sha512-YJhRJtlj8qI8w/UrL7wX2ysIIDFFGLGkeCJOJh6RiCYWqIe3Xo4fEevUC6LoTp2uPrOzxRkmgGUwH8Aze41usA==" 
             crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" 
-            integrity="sha512-qZvrmS2ekKPF2mSznTQsxqPgnpkI4DNTlrdUmTzrDgektczlKNRRhy5X5AAOnx5S09ydFYWWNSfcEqDTTHgtNA==" 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+            integrity="sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcbZK34nLaR3cAeYSJshoxIOq3mjEf7xJE8YWIUHMn+oCQ=="
             crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" 
-            integrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu+Wgds8Gp/gU33kqBtgNS4tSPHuGibyoeqMV/TJlSKda6FXzoEyYGjTe+vXA==" 
-            crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="latex-warnings.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
