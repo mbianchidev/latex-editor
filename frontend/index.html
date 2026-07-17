@@ -64,6 +64,19 @@
                     </svg>
                     ZIP
                 </button>
+                <button class="btn btn-secondary" id="commitGithubBtn"
+                        title="Commit project changes to GitHub" style="display: none;">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2">
+                        <circle cx="6" cy="5" r="2"/>
+                        <circle cx="18" cy="6" r="2"/>
+                        <circle cx="6" cy="19" r="2"/>
+                        <path d="M6 7v10"/>
+                        <path d="M8 7.5c4.5 0 3.5 5 8 5"/>
+                        <path d="M16 10.5l2 2-2 2"/>
+                    </svg>
+                    Commit
+                </button>
                 <button class="btn btn-primary" id="downloadPdf" title="Download PDF">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -303,7 +316,7 @@
                 <div class="form-group">
                     <label for="githubToken">Personal Access Token (PAT)</label>
                     <input type="password" id="githubToken" class="form-input" placeholder="ghp_xxxxxxxxxxxx" autocomplete="off">
-                    <small class="form-hint">Use a fine-grained token scoped to the target repository with <code>Contents</code> read and write access. The token stays in this browser tab.</small>
+                    <small class="form-hint">Use a fine-grained token scoped to the target repository with <code>Contents</code> read and write access. The backend encrypts it before storing it in the local SQLite database.</small>
                 </div>
                 <div id="githubStatus" class="github-status"></div>
                 <div class="form-group" id="githubRepoGroup" style="display:none;">

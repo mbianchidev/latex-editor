@@ -107,7 +107,8 @@ const state = {
   projectFilesIncomplete: false,
   projectSwitchInProgress: false,
   // GitHub
-  githubToken: null,
+  githubTokenConfigured: false,
+  githubTokenNeedsReconnect: false,
   githubLogin: null,
   githubRepo: null,
   githubPath: '',
@@ -133,6 +134,7 @@ const elements = {
   downloadTexBtn: document.getElementById('downloadTex'),
   zipFileInput: document.getElementById('zipFileInput'),
   downloadZipBtn: document.getElementById('downloadZip'),
+  commitGithubBtn: document.getElementById('commitGithubBtn'),
   zoomInBtn: document.getElementById('zoomIn'),
   zoomOutBtn: document.getElementById('zoomOut'),
   zoomLevel: document.getElementById('zoomLevel'),
@@ -752,6 +754,7 @@ function initializeEventListeners() {
   elements.downloadPdfBtn.addEventListener('click', downloadPDF);
   elements.downloadTexBtn.addEventListener('click', downloadTeX);
   elements.downloadZipBtn.addEventListener('click', downloadProjectZip);
+  elements.commitGithubBtn.addEventListener('click', commitFromProjectPage);
   
   // Zoom controls
   elements.zoomInBtn.addEventListener('click', () => setZoom(state.zoom + 0.1));
@@ -1331,6 +1334,7 @@ function setProjectSwitchInProgress(inProgress) {
     cancelAutoCompile();
   }
   state.projectSwitchInProgress = inProgress;
+  refreshProjectGithubActions();
   elements.fileTree.style.pointerEvents = inProgress ? 'none' : '';
   if (elements.newDocBtn) {
     elements.newDocBtn.disabled = inProgress;
@@ -1623,6 +1627,7 @@ function clearProjectGithubLink() {
   state.githubBranch = null;
   state.githubSha = null;
   state.githubManifest = {};
+  refreshProjectGithubActions();
 }
 
 function setProjectGithubLink(github) {
@@ -1636,6 +1641,7 @@ function setProjectGithubLink(github) {
   state.githubBranch = github.branch;
   state.githubSha = github.sha;
   state.githubManifest = { ...(github.manifest || {}) };
+  refreshProjectGithubActions();
 }
 
 function getCurrentGithubLink() {
@@ -1649,6 +1655,15 @@ function getCurrentGithubLink() {
     sha: state.githubSha,
     manifest: { ...state.githubManifest },
   };
+}
+
+function refreshProjectGithubActions() {
+  const linked = Boolean(state.currentProjectId && getCurrentGithubLink());
+  elements.commitGithubBtn.style.display = linked ? '' : 'none';
+  elements.commitGithubBtn.disabled = (
+    state.githubSyncInProgress
+    || state.projectSwitchInProgress
+  );
 }
 
 function serializeProjectFiles(files = state.projectFiles) {
@@ -3455,6 +3470,7 @@ async function deleteProjectFromBackend(projectId, projectName) {
     if (state.currentProjectId === projectId) {
       state.currentProjectId = null;
       state.currentProjectName = null;
+      clearProjectGithubLink();
       newDocument();
     }
     loadProjectsList();
@@ -3480,18 +3496,15 @@ function scheduleBackendSave() {
 // GITHUB INTEGRATION
 // ============================================
 
-const GITHUB_API_BASE = 'https://api.github.com';
 const MAX_GITHUB_IMPORT_FILES = 500;
 const MAX_GITHUB_IMPORT_BYTES = 7 * 1024 * 1024;
 const GITHUB_REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
 const GITHUB_BRANCH_FORBIDDEN = /[\x00-\x20\x7f~^:?*\[\\]/;
 const GITHUB_FILE_MODES = new Set(['100644', '100755', '120000']);
 
-function openGithubModal() {
+async function openGithubModal() {
   elements.githubModalOverlay.classList.add('open');
-
-  loadGithubSession();
-  elements.githubToken.value = state.githubToken || '';
+  elements.githubToken.value = '';
 
   const link = getCurrentGithubLink();
   elements.githubRepo.value = link?.repo
@@ -3504,8 +3517,9 @@ function openGithubModal() {
     || localStorage.getItem('latexEditor_githubBranch')
     || '';
 
+  await loadGithubConnection();
   refreshGithubModal();
-  if (state.githubToken) {
+  if (state.githubTokenConfigured) {
     elements.githubRepo.focus();
   } else {
     elements.githubToken.focus();
@@ -3519,32 +3533,114 @@ function closeGithubModal(force = false) {
   elements.githubModalOverlay.classList.remove('open');
 }
 
-function loadGithubSession() {
+function clearLegacyGithubTokenStorage() {
   try {
-    const legacyToken = localStorage.getItem('latexEditor_githubToken');
-    const token = sessionStorage.getItem('latexEditor_githubToken') || legacyToken;
-    if (token) {
-      sessionStorage.setItem('latexEditor_githubToken', token);
-      state.githubToken = token;
-    }
-    state.githubLogin = sessionStorage.getItem('latexEditor_githubLogin');
+    sessionStorage.removeItem('latexEditor_githubToken');
+    sessionStorage.removeItem('latexEditor_githubLogin');
     localStorage.removeItem('latexEditor_githubToken');
   } catch (error) {
-    console.error('Failed to restore GitHub session:', error);
+    console.error('Failed to clear legacy GitHub token storage:', error);
   }
 }
 
+async function githubTokenRequest(options = {}) {
+  const response = await fetch(`${API_BASE}/github-token`, {
+    cache: 'no-store',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  });
+  if (response.status === 204) return null;
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || `GitHub credential request failed (HTTP ${response.status})`);
+  }
+  return data;
+}
+
+async function loadGithubConnection() {
+  if (state.githubTokenConfigured) return true;
+
+  let legacyToken = null;
+  try {
+    legacyToken = (
+      sessionStorage.getItem('latexEditor_githubToken')
+      || localStorage.getItem('latexEditor_githubToken')
+    );
+  } catch (error) {
+    console.error('Failed to read legacy GitHub token storage:', error);
+  }
+
+  let status;
+  try {
+    status = await githubTokenRequest();
+  } catch (error) {
+    console.error('Failed to load stored GitHub credentials:', error);
+    state.githubTokenConfigured = false;
+    refreshGithubModal();
+    refreshProjectGithubActions();
+    return false;
+  }
+
+  state.githubTokenConfigured = Boolean(status.configured);
+  state.githubTokenNeedsReconnect = Boolean(status.needs_reconnect);
+  if (state.githubTokenConfigured) {
+    clearLegacyGithubTokenStorage();
+    refreshGithubModal();
+    refreshProjectGithubActions();
+    return true;
+  }
+
+  if (legacyToken) {
+    try {
+      const migrated = await githubTokenRequest({
+        method: 'PUT',
+        body: JSON.stringify({ token: legacyToken }),
+      });
+      state.githubTokenConfigured = true;
+      state.githubTokenNeedsReconnect = false;
+      state.githubLogin = migrated.login || null;
+      clearLegacyGithubTokenStorage();
+      refreshGithubModal();
+      refreshProjectGithubActions();
+      return true;
+    } catch (error) {
+      console.error('Failed to migrate legacy GitHub credentials:', error);
+      refreshGithubModal();
+      refreshProjectGithubActions();
+      return false;
+    }
+  }
+
+  clearLegacyGithubTokenStorage();
+  state.githubTokenConfigured = false;
+  refreshGithubModal();
+  refreshProjectGithubActions();
+  return false;
+}
+
 function refreshGithubModal() {
-  const connected = Boolean(state.githubToken);
+  const connected = state.githubTokenConfigured;
   const link = getCurrentGithubLink();
 
-  elements.githubStatus.className = connected
-    ? 'github-status connected'
-    : 'github-status';
-  elements.githubStatus.textContent = connected
-    ? `Authenticated${state.githubLogin ? ` as ${state.githubLogin}` : ''}`
-    : '';
-  elements.githubStatus.style.display = connected ? 'block' : 'none';
+  elements.githubStatus.className = state.githubTokenNeedsReconnect
+    ? 'github-status error'
+    : (connected ? 'github-status connected' : 'github-status');
+  elements.githubStatus.textContent = state.githubTokenNeedsReconnect
+    ? 'Stored PAT cannot be decrypted. Connect GitHub again.'
+    : (
+      connected
+        ? `Encrypted PAT configured${state.githubLogin ? ` for ${state.githubLogin}` : ''}`
+        : ''
+    );
+  elements.githubStatus.style.display = (
+    connected || state.githubTokenNeedsReconnect
+  ) ? 'block' : 'none';
+  elements.githubToken.placeholder = connected
+    ? 'Encrypted PAT stored locally'
+    : 'github_pat_xxxxxxxxxxxx';
   elements.githubSave.style.display = connected ? 'none' : '';
   elements.githubDisconnect.style.display = connected ? '' : 'none';
   elements.githubRepoGroup.style.display = connected ? '' : 'none';
@@ -3563,6 +3659,7 @@ function refreshGithubModal() {
   }
 
   setGithubControlsDisabled(state.githubSyncInProgress);
+  refreshProjectGithubActions();
 }
 
 function setGithubControlsDisabled(disabled) {
@@ -3572,6 +3669,7 @@ function setGithubControlsDisabled(disabled) {
     elements.githubImport,
     elements.githubPull,
     elements.githubCommit,
+    elements.commitGithubBtn,
     elements.githubRepo,
     elements.githubPath,
     elements.githubBranch,
@@ -3591,14 +3689,21 @@ async function connectGithub() {
   }
 
   try {
-    const user = await githubApi('/user', {}, token);
-
-    state.githubToken = token;
-    state.githubLogin = user.login;
-    sessionStorage.setItem('latexEditor_githubToken', token);
-    sessionStorage.setItem('latexEditor_githubLogin', user.login);
+    const connection = await githubTokenRequest({
+      method: 'PUT',
+      body: JSON.stringify({ token }),
+    });
+    state.githubTokenConfigured = true;
+    state.githubTokenNeedsReconnect = false;
+    state.githubLogin = connection.login || null;
+    elements.githubToken.value = '';
+    clearLegacyGithubTokenStorage();
     refreshGithubModal();
-    showSuccessToast(`Connected to GitHub as ${user.login}`);
+    showSuccessToast(
+      state.githubLogin
+        ? `Connected to GitHub as ${state.githubLogin}`
+        : 'Connected to GitHub'
+    );
   } catch (err) {
     elements.githubStatus.className = 'github-status error';
     elements.githubStatus.textContent = `Authentication failed: ${err.message}`;
@@ -3606,15 +3711,21 @@ async function connectGithub() {
   }
 }
 
-function disconnectGithub() {
-  state.githubToken = null;
-  state.githubLogin = null;
-  sessionStorage.removeItem('latexEditor_githubToken');
-  sessionStorage.removeItem('latexEditor_githubLogin');
-  localStorage.removeItem('latexEditor_githubToken');
-  elements.githubToken.value = '';
-  refreshGithubModal();
-  showSuccessToast('Disconnected from GitHub');
+async function disconnectGithub() {
+  try {
+    await githubTokenRequest({ method: 'DELETE' });
+    state.githubTokenConfigured = false;
+    state.githubTokenNeedsReconnect = false;
+    state.githubLogin = null;
+    clearLegacyGithubTokenStorage();
+    elements.githubToken.value = '';
+    refreshGithubModal();
+    showSuccessToast('Disconnected from GitHub');
+  } catch (error) {
+    elements.githubStatus.className = 'github-status error';
+    elements.githubStatus.textContent = `Disconnect failed: ${error.message}`;
+    elements.githubStatus.style.display = 'block';
+  }
 }
 
 function normalizeGithubFolder(rawPath) {
@@ -3680,27 +3791,33 @@ function encodeGithubRef(branch) {
   return ['heads', ...branch.split('/')].map(encodeURIComponent).join('/');
 }
 
-async function githubApi(path, options = {}, token = state.githubToken) {
-  const headers = {
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    ...(options.headers || {}),
-  };
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+async function githubApi(path, options = {}) {
+  const method = (options.method || 'GET').toUpperCase();
+  let body = null;
+  if (options.body) {
+    try {
+      body = JSON.parse(options.body);
+    } catch {
+      throw new Error('GitHub request body must be JSON');
+    }
   }
 
-  const response = await fetch(`${GITHUB_API_BASE}${path}`, {
-    ...options,
+  const response = await fetch(`${API_BASE}/github`, {
+    method: 'POST',
     cache: 'no-store',
-    headers,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, method, body }),
   });
   const data = response.status === 204
     ? null
     : await response.json().catch(() => null);
 
   if (!response.ok) {
-    let message = data?.message || `GitHub request failed (HTTP ${response.status})`;
+    let message = (
+      data?.message
+      || data?.error
+      || `GitHub request failed (HTTP ${response.status})`
+    );
     if (
       response.status === 403
       && response.headers.get('X-RateLimit-Remaining') === '0'
@@ -3710,6 +3827,11 @@ async function githubApi(path, options = {}, token = state.githubToken) {
         ? new Date(reset).toLocaleTimeString()
         : 'later';
       message = `GitHub API rate limit reached. Try again after ${resetText}.`;
+    }
+    if (response.status === 401 && data?.needs_reconnect) {
+      state.githubTokenConfigured = false;
+      state.githubTokenNeedsReconnect = true;
+      refreshGithubModal();
     }
     const error = new Error(message);
     error.status = response.status;
@@ -4004,8 +4126,9 @@ async function runGithubOperation(label, operation) {
 }
 
 async function importFromGithub() {
-  if (!state.githubToken) {
+  if (!(await loadGithubConnection())) {
     showErrorToast('Connect to GitHub first');
+    openGithubModal();
     return;
   }
 
@@ -4073,6 +4196,11 @@ async function pullFromGithub() {
     showErrorToast('Open a project linked to GitHub first');
     return;
   }
+  if (!(await loadGithubConnection())) {
+    showErrorToast('Connect to GitHub first');
+    openGithubModal();
+    return;
+  }
   const projectId = state.currentProjectId;
 
   const confirmed = await showConfirmModal(
@@ -4123,6 +4251,11 @@ async function commitToGithub() {
   const link = getCurrentGithubLink();
   if (!link || !state.currentProjectId) {
     showErrorToast('Open a project linked to GitHub first');
+    return;
+  }
+  if (!(await loadGithubConnection())) {
+    showErrorToast('Connect to GitHub first');
+    openGithubModal();
     return;
   }
   if (state.projectFilesIncomplete) {
@@ -4308,6 +4441,14 @@ async function commitToGithub() {
     showSuccessToast(`Committed ${commit.sha.slice(0, 7)} to ${link.branch}`);
     showStatus('GitHub commit complete', 'success');
   });
+}
+
+async function commitFromProjectPage() {
+  if (!getCurrentGithubLink() || !state.currentProjectId) {
+    showErrorToast('Open a project linked to GitHub first');
+    return;
+  }
+  await commitToGithub();
 }
 
 // ============================================

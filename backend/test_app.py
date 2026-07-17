@@ -4,9 +4,13 @@ Backend API Tests
 import base64
 import os
 import sqlite3
+import stat
 import tempfile
+from pathlib import Path
+
 import pytest
 import app as app_module
+from cryptography.fernet import Fernet
 from app import app, documents, documents_lock, MAX_DOCUMENTS
 
 
@@ -19,8 +23,13 @@ def client():
         test_db = f.name
     
     original_db = app_module.DB_PATH
+    original_key = app_module.GITHUB_TOKEN_ENCRYPTION_KEY
+    original_key_path = app_module.GITHUB_TOKEN_KEY_PATH
     app_module.DB_PATH = test_db
+    app_module.GITHUB_TOKEN_ENCRYPTION_KEY = None
+    app_module.GITHUB_TOKEN_KEY_PATH = None
     app_module.init_db()
+    test_key_path = Path(test_db).with_suffix(".github-token.key")
     
     with app.test_client() as client:
         with documents_lock:
@@ -28,7 +37,10 @@ def client():
         yield client
     
     app_module.DB_PATH = original_db
+    app_module.GITHUB_TOKEN_ENCRYPTION_KEY = original_key
+    app_module.GITHUB_TOKEN_KEY_PATH = original_key_path
     os.unlink(test_db)
+    test_key_path.unlink(missing_ok=True)
 
 
 class TestHealthEndpoint:
@@ -100,6 +112,264 @@ class TestSettingsEndpoint:
         assert "max_projects" in data
         assert "max_documents" in data
         assert "max_content_length" in data
+
+
+class TestGithubTokenEndpoint:
+    """Tests for encrypted GitHub PAT storage and API proxying."""
+
+    token = "github_pat_" + ("a" * 40)
+
+    @staticmethod
+    def mock_authenticated_user(monkeypatch):
+        def github_request(token, path, method="GET", body=None):
+            assert path == "/user"
+            assert method == "GET"
+            assert body is None
+            return 200, b'{"login":"octocat"}', {}
+
+        monkeypatch.setattr(app_module, "_github_http_request", github_request)
+
+    def test_stores_encrypted_token_and_reports_status(self, client, monkeypatch):
+        self.mock_authenticated_user(monkeypatch)
+
+        response = client.put("/api/v1/github-token", json={"token": self.token})
+
+        assert response.status_code == 200
+        assert response.get_json() == {
+            "configured": True,
+            "key_source": "generated-file",
+            "login": "octocat",
+        }
+
+        connection = sqlite3.connect(app_module.DB_PATH)
+        encrypted = connection.execute(
+            "SELECT encrypted_value FROM app_secrets WHERE key = 'github_pat'"
+        ).fetchone()[0]
+        connection.close()
+        assert self.token not in encrypted
+
+        key_path = Path(app_module.DB_PATH).with_suffix(".github-token.key")
+        assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
+        key = key_path.read_bytes()
+        app_module.init_db()
+        assert key_path.read_bytes() == key
+
+        status_response = client.get("/api/v1/github-token")
+        status = status_response.get_json()
+        assert status == {
+            "configured": True,
+            "key_source": "generated-file",
+            "needs_reconnect": False,
+        }
+        assert "token" not in status
+
+        settings = client.get("/api/v1/settings").get_json()
+        assert settings["github_token_configured"] is True
+        assert settings["github_token_needs_reconnect"] is False
+        assert settings["github_token_key_source"] == "generated-file"
+
+    def test_deletes_stored_token(self, client, monkeypatch):
+        self.mock_authenticated_user(monkeypatch)
+        client.put("/api/v1/github-token", json={"token": self.token})
+
+        response = client.delete("/api/v1/github-token")
+
+        assert response.status_code == 204
+        assert client.get("/api/v1/github-token").get_json()["configured"] is False
+
+    def test_key_mismatch_requires_reconnect(self, client, monkeypatch):
+        self.mock_authenticated_user(monkeypatch)
+        client.put("/api/v1/github-token", json={"token": self.token})
+        app_module.GITHUB_TOKEN_ENCRYPTION_KEY = Fernet.generate_key().decode("ascii")
+
+        status = client.get("/api/v1/github-token").get_json()
+
+        assert status["configured"] is False
+        assert status["needs_reconnect"] is True
+        settings = client.get("/api/v1/settings").get_json()
+        assert settings["github_token_configured"] is False
+        assert settings["github_token_needs_reconnect"] is True
+
+    def test_corrupt_ciphertext_requires_reconnect(self, client):
+        connection = sqlite3.connect(app_module.DB_PATH)
+        connection.execute(
+            """
+            INSERT INTO app_secrets (key, encrypted_value, updated_at)
+            VALUES ('github_pat', 'corrupt', 'now')
+            """
+        )
+        connection.commit()
+        connection.close()
+
+        status = client.get("/api/v1/github-token").get_json()
+
+        assert status["configured"] is False
+        assert status["needs_reconnect"] is True
+
+    def test_environment_key_does_not_create_key_file(self, client, monkeypatch):
+        self.mock_authenticated_user(monkeypatch)
+        app_module.GITHUB_TOKEN_ENCRYPTION_KEY = Fernet.generate_key().decode("ascii")
+
+        response = client.put("/api/v1/github-token", json={"token": self.token})
+
+        assert response.status_code == 200
+        assert response.get_json()["key_source"] == "environment"
+        key_path = Path(app_module.DB_PATH).with_suffix(".github-token.key")
+        assert not key_path.exists()
+
+    def test_rejects_invalid_or_rejected_token(self, client, monkeypatch):
+        invalid = client.put("/api/v1/github-token", json={"token": "short"})
+        assert invalid.status_code == 400
+
+        monkeypatch.setattr(
+            app_module,
+            "_github_http_request",
+            lambda *_args, **_kwargs: (
+                401,
+                b'{"message":"Bad credentials"}',
+                {},
+            ),
+        )
+        rejected = client.put("/api/v1/github-token", json={"token": self.token})
+        assert rejected.status_code == 401
+        assert rejected.get_json()["error"] == "GitHub rejected the PAT"
+
+    def test_proxies_allowed_request_with_stored_token(self, client, monkeypatch):
+        self.mock_authenticated_user(monkeypatch)
+        client.put("/api/v1/github-token", json={"token": self.token})
+        captured = {}
+
+        def github_request(token, path, method="GET", body=None):
+            captured.update({
+                "token": token,
+                "path": path,
+                "method": method,
+                "body": body,
+            })
+            return 201, b'{"sha":"b123"}', {
+                "X-RateLimit-Remaining": "4999",
+            }
+
+        monkeypatch.setattr(app_module, "_github_http_request", github_request)
+        response = client.post("/api/v1/github", json={
+            "path": "/repos/owner/repo/git/blobs",
+            "method": "POST",
+            "body": {"content": "hello", "encoding": "utf-8"},
+        })
+
+        assert response.status_code == 201
+        assert response.get_json() == {"sha": "b123"}
+        assert response.headers["X-RateLimit-Remaining"] == "4999"
+        assert captured == {
+            "token": self.token,
+            "path": "/repos/owner/repo/git/blobs",
+            "method": "POST",
+            "body": {"content": "hello", "encoding": "utf-8"},
+        }
+
+    def test_http_request_uses_bearer_token(self, monkeypatch):
+        captured = {}
+
+        class FakeResponse:
+            status = 200
+            headers = {}
+
+            def read(self):
+                return b"{}"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        class FakeOpener:
+            def open(self, request, timeout):
+                captured["authorization"] = request.get_header("Authorization")
+                captured["url"] = request.full_url
+                captured["timeout"] = timeout
+                return FakeResponse()
+
+        monkeypatch.setattr(
+            app_module.urllib.request,
+            "build_opener",
+            lambda *_handlers: FakeOpener(),
+        )
+
+        status, body, _headers = app_module._github_http_request(
+            self.token,
+            "/user",
+        )
+
+        assert status == 200
+        assert body == b"{}"
+        assert captured == {
+            "authorization": f"Bearer {self.token}",
+            "url": "https://api.github.com/user",
+            "timeout": app_module.GITHUB_API_TIMEOUT_SECONDS,
+        }
+
+    @pytest.mark.parametrize("payload", [
+        {
+            "path": "https://example.com/steal",
+            "method": "GET",
+        },
+        {
+            "path": "/repos/owner/repo/issues",
+            "method": "GET",
+        },
+        {
+            "path": "/repos/owner/repo/git/blobs",
+            "method": "DELETE",
+        },
+        {
+            "path": "/repos/owner/repo/git/trees/" + ("a" * 40) + "?other=1",
+            "method": "GET",
+        },
+    ])
+    def test_rejects_disallowed_proxy_request(self, client, payload):
+        response = client.post("/api/v1/github", json=payload)
+        assert response.status_code == 400
+        assert response.get_json()["error"] == "GitHub API request is not allowed"
+
+    @pytest.mark.parametrize(("payload", "expected"), [
+        (
+            {"path": "/user", "method": "GET"},
+            ("/user", "GET", None),
+        ),
+        (
+            {
+                "path": "/repos/owner/repo/git/ref/heads/feature/test",
+                "method": "GET",
+            },
+            ("/repos/owner/repo/git/ref/heads/feature/test", "GET", None),
+        ),
+        (
+            {
+                "path": "/repos/owner/repo/git/trees/" + ("a" * 40) + "?recursive=1",
+                "method": "GET",
+            },
+            (
+                "/repos/owner/repo/git/trees/" + ("a" * 40) + "?recursive=1",
+                "GET",
+                None,
+            ),
+        ),
+        (
+            {
+                "path": "/repos/owner/repo/git/refs/heads/feature/test",
+                "method": "PATCH",
+                "body": {"sha": "a" * 40, "force": False},
+            },
+            (
+                "/repos/owner/repo/git/refs/heads/feature/test",
+                "PATCH",
+                {"sha": "a" * 40, "force": False},
+            ),
+        ),
+    ])
+    def test_allows_required_github_sync_paths(self, payload, expected):
+        assert app_module._validate_github_proxy_request(payload) == expected
 
 
 class TestCompileEndpoint:

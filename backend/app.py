@@ -15,6 +15,9 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +26,7 @@ from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from cryptography.fernet import Fernet, InvalidToken
 from pypdf import PdfReader
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -61,6 +65,11 @@ COMPILE_MEMORY_BYTES = int(
 )
 COMPILE_LOG_LIMIT = 12000
 DEFAULT_LATEX_ENGINE = "xelatex"
+GITHUB_API_BASE = "https://api.github.com"
+GITHUB_TOKEN_ENCRYPTION_KEY = os.environ.get("GITHUB_TOKEN_ENCRYPTION_KEY")
+GITHUB_TOKEN_KEY_PATH = os.environ.get("GITHUB_TOKEN_KEY_PATH")
+MAX_GITHUB_TOKEN_LENGTH = 1024
+GITHUB_API_TIMEOUT_SECONDS = 30
 LATEX_ENGINES = {
     "pdflatex": {
         "mode": "-pdflatex",
@@ -112,6 +121,7 @@ limiter = Limiter(
 # In-memory document storage with thread-safe access
 documents = {}
 documents_lock = threading.Lock()
+github_token_key_lock = threading.Lock()
 
 
 # ============================================
@@ -169,6 +179,11 @@ def init_db():
             UNIQUE(project_id, path)
         );
         CREATE INDEX IF NOT EXISTS idx_project_files_project ON project_files(project_id);
+        CREATE TABLE IF NOT EXISTS app_secrets (
+            key TEXT PRIMARY KEY,
+            encrypted_value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
     """)
 
     existing_columns = {
@@ -201,6 +216,256 @@ init_db()
 def _utcnow():
     """Return current UTC time as ISO string."""
     return datetime.now(timezone.utc).isoformat()
+
+
+class GithubTokenKeyError(Exception):
+    """Raised when the GitHub PAT encryption key is unavailable or invalid."""
+
+
+class GithubApiUnavailable(Exception):
+    """Raised when GitHub cannot be reached safely."""
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep Authorization headers from being forwarded across redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _github_token_key_source():
+    return "environment" if GITHUB_TOKEN_ENCRYPTION_KEY else "generated-file"
+
+
+def _github_token_key_path():
+    if GITHUB_TOKEN_KEY_PATH:
+        return Path(GITHUB_TOKEN_KEY_PATH).expanduser()
+    return Path(DB_PATH).with_suffix(".github-token.key")
+
+
+def _validate_fernet_key(key):
+    try:
+        Fernet(key)
+    except (TypeError, ValueError) as error:
+        raise GithubTokenKeyError("GitHub token encryption key is invalid") from error
+    return key
+
+
+def _read_github_token_key(path):
+    try:
+        key = path.read_bytes().strip()
+    except OSError as error:
+        raise GithubTokenKeyError("GitHub token encryption key cannot be read") from error
+    _validate_fernet_key(key)
+    try:
+        path.chmod(0o600)
+    except OSError as error:
+        raise GithubTokenKeyError(
+            "GitHub token encryption key permissions cannot be secured"
+        ) from error
+    return key
+
+
+def _create_github_token_key(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    key = Fernet.generate_key()
+    file_descriptor, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+    )
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(file_descriptor, "wb") as key_file:
+            os.fchmod(key_file.fileno(), 0o600)
+            key_file.write(key)
+            key_file.flush()
+            os.fsync(key_file.fileno())
+        try:
+            os.link(temp_path, path)
+        except FileExistsError:
+            pass
+        try:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+        except OSError:
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _github_token_cipher():
+    if GITHUB_TOKEN_ENCRYPTION_KEY:
+        try:
+            key = GITHUB_TOKEN_ENCRYPTION_KEY.encode("ascii")
+        except UnicodeEncodeError as error:
+            raise GithubTokenKeyError(
+                "GitHub token encryption key is invalid"
+            ) from error
+        return Fernet(_validate_fernet_key(key))
+
+    key_path = _github_token_key_path()
+    with github_token_key_lock:
+        if not key_path.exists():
+            try:
+                _create_github_token_key(key_path)
+            except OSError as error:
+                raise GithubTokenKeyError(
+                    "GitHub token encryption key cannot be created"
+                ) from error
+        return Fernet(_read_github_token_key(key_path))
+
+
+def _validate_github_token(token):
+    if not isinstance(token, str):
+        raise ValueError("GitHub PAT must be a string")
+    if (
+        len(token) < 20
+        or len(token) > MAX_GITHUB_TOKEN_LENGTH
+        or token != token.strip()
+        or any(ord(char) < 33 or ord(char) == 127 for char in token)
+    ):
+        raise ValueError("GitHub PAT format is invalid")
+    return token
+
+
+def _stored_github_token(db):
+    row = db.execute(
+        "SELECT encrypted_value FROM app_secrets WHERE key = ?",
+        ("github_pat",),
+    ).fetchone()
+    if not row:
+        return None, False
+
+    try:
+        token = _github_token_cipher().decrypt(
+            row["encrypted_value"].encode("ascii")
+        ).decode("utf-8")
+        return _validate_github_token(token), False
+    except (InvalidToken, UnicodeError, ValueError):
+        app.logger.warning(
+            "Stored GitHub PAT cannot be decrypted; reconnect GitHub to replace it"
+        )
+        return None, True
+
+
+def _store_github_token(db, token):
+    encrypted = _github_token_cipher().encrypt(token.encode("utf-8")).decode("ascii")
+    db.execute(
+        """
+        INSERT INTO app_secrets (key, encrypted_value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            encrypted_value = excluded.encrypted_value,
+            updated_at = excluded.updated_at
+        """,
+        ("github_pat", encrypted, _utcnow()),
+    )
+    db.commit()
+
+
+def _delete_github_token(db):
+    db.execute("DELETE FROM app_secrets WHERE key = ?", ("github_pat",))
+    db.commit()
+
+
+def _validate_github_proxy_request(data):
+    if not isinstance(data, dict):
+        raise ValueError("Request body must be a JSON object")
+
+    path = data.get("path")
+    method = data.get("method", "GET")
+    body = data.get("body")
+    if not isinstance(path, str) or len(path) > 2048:
+        raise ValueError("GitHub API path is invalid")
+    if not isinstance(method, str):
+        raise ValueError("GitHub API method is invalid")
+    method = method.upper()
+    if method not in {"GET", "POST", "PATCH"}:
+        raise ValueError("GitHub API method is not allowed")
+
+    parsed = urllib.parse.urlsplit(path)
+    decoded_path = urllib.parse.unquote(parsed.path)
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or not parsed.path.startswith("/")
+        or any(segment in {".", ".."} for segment in decoded_path.split("/"))
+        or any(ord(char) < 32 or ord(char) == 127 for char in path)
+    ):
+        raise ValueError("GitHub API path is invalid")
+    if parsed.query and parsed.query != "recursive=1":
+        raise ValueError("GitHub API query is not allowed")
+
+    if parsed.path == "/user":
+        if method != "GET":
+            raise ValueError("GitHub API method is not allowed")
+        return path, method, None
+
+    match = re.match(
+        r"^/repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?P<suffix>.*)$",
+        parsed.path,
+    )
+    if not match:
+        raise ValueError("GitHub API path is not allowed")
+    suffix = match.group("suffix")
+
+    allowed = False
+    if method == "GET":
+        allowed = (
+            suffix == ""
+            or re.fullmatch(r"/git/ref/heads/.+", suffix) is not None
+            or re.fullmatch(r"/git/commits/[0-9a-fA-F]{40}", suffix) is not None
+            or re.fullmatch(r"/git/trees/[0-9a-fA-F]{40}", suffix) is not None
+            or re.fullmatch(r"/git/blobs/[0-9a-fA-F]{40}", suffix) is not None
+        )
+    elif method == "POST":
+        allowed = suffix in {"/git/blobs", "/git/trees", "/git/commits"}
+    elif method == "PATCH":
+        allowed = re.fullmatch(r"/git/refs/heads/.+", suffix) is not None
+    if not allowed:
+        raise ValueError("GitHub API path is not allowed")
+    if method == "GET" and body is not None:
+        raise ValueError("GitHub GET requests cannot contain a body")
+    if method != "GET" and not isinstance(body, (dict, list)):
+        raise ValueError("GitHub API body must be JSON")
+    return path, method, body
+
+
+def _github_http_request(token, path, method="GET", body=None):
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    request_headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "latex-editor",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if data is not None:
+        request_headers["Content-Type"] = "application/json"
+
+    github_request = urllib.request.Request(
+        f"{GITHUB_API_BASE}{path}",
+        data=data,
+        headers=request_headers,
+        method=method,
+    )
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+    try:
+        with opener.open(
+            github_request,
+            timeout=GITHUB_API_TIMEOUT_SECONDS,
+        ) as response:
+            return response.status, response.read(), dict(response.headers)
+    except urllib.error.HTTPError as error:
+        return error.code, error.read(), dict(error.headers)
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise GithubApiUnavailable("GitHub API request failed") from error
 
 
 GITHUB_REPO_PATTERN = re.compile(
@@ -723,6 +988,10 @@ def api_status():
             {"path": "/api/v1/status", "method": "GET", "description": "API status"},
             {"path": "/api/v1/settings", "method": "GET", "description": "Server settings"},
             {"path": "/api/v1/compile", "method": "POST", "description": "Compile a LaTeX project to PDF"},
+            {"path": "/api/v1/github-token", "method": "GET", "description": "GitHub PAT status"},
+            {"path": "/api/v1/github-token", "method": "PUT", "description": "Validate and store GitHub PAT"},
+            {"path": "/api/v1/github-token", "method": "DELETE", "description": "Delete stored GitHub PAT"},
+            {"path": "/api/v1/github", "method": "POST", "description": "Proxy an allowed GitHub API request"},
             {"path": "/api/v1/documents", "method": "GET", "description": "List all documents"},
             {"path": "/api/v1/documents", "method": "POST", "description": "Create a document"},
             {"path": "/api/v1/documents/:id", "method": "GET", "description": "Get a document"},
@@ -746,6 +1015,13 @@ def get_settings():
         db_size = os.path.getsize(DB_PATH)
     except OSError:
         pass
+    try:
+        github_token, github_token_needs_reconnect = _stored_github_token(get_db())
+    except GithubTokenKeyError as error:
+        app.logger.error("GitHub token key unavailable: %s", error)
+        github_token = None
+        github_token_needs_reconnect = True
+
     return jsonify({
         "storage_path": DB_PATH,
         "db_size_bytes": db_size,
@@ -756,7 +1032,111 @@ def get_settings():
         "max_compile_files": MAX_COMPILE_FILES,
         "compile_timeout_seconds": COMPILE_TIMEOUT_SECONDS,
         "latex_engines": list(LATEX_ENGINES),
+        "github_token_configured": github_token is not None,
+        "github_token_needs_reconnect": github_token_needs_reconnect,
+        "github_token_key_source": _github_token_key_source(),
     })
+
+
+@app.route("/api/v1/github-token", methods=["GET", "PUT", "DELETE"])
+@limiter.limit("30 per minute")
+def github_token_endpoint():
+    """Manage the encrypted GitHub PAT without returning plaintext to clients."""
+    db = get_db()
+    if request.method == "GET":
+        try:
+            token, needs_reconnect = _stored_github_token(db)
+        except GithubTokenKeyError as error:
+            app.logger.error("GitHub token key unavailable: %s", error)
+            return jsonify({"error": "GitHub credential storage is unavailable"}), 500
+        response = jsonify({
+            "configured": token is not None,
+            "needs_reconnect": needs_reconnect,
+            "key_source": _github_token_key_source(),
+        })
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    if request.method == "DELETE":
+        _delete_github_token(db)
+        return "", 204
+
+    data = request.get_json(silent=True)
+    try:
+        token = _validate_github_token(data.get("token") if isinstance(data, dict) else None)
+    except ValueError:
+        return jsonify({"error": "A valid GitHub PAT is required"}), 400
+
+    try:
+        status, body, _ = _github_http_request(token, "/user")
+    except GithubApiUnavailable:
+        return jsonify({"error": "GitHub is unavailable"}), 502
+    if status != 200:
+        return jsonify({"error": "GitHub rejected the PAT"}), 401
+    try:
+        github_user = json.loads(body)
+        login = github_user["login"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return jsonify({"error": "GitHub returned an invalid authentication response"}), 502
+
+    try:
+        _store_github_token(db, token)
+    except GithubTokenKeyError as error:
+        app.logger.error("GitHub token key unavailable: %s", error)
+        return jsonify({"error": "GitHub credential storage is unavailable"}), 500
+
+    response = jsonify({
+        "configured": True,
+        "login": login,
+        "key_source": _github_token_key_source(),
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/api/v1/github", methods=["POST"])
+@limiter.limit("120 per minute")
+def github_proxy():
+    """Proxy the limited GitHub API surface used by folder synchronization."""
+    try:
+        path, method, body = _validate_github_proxy_request(
+            request.get_json(silent=True)
+        )
+    except ValueError:
+        return jsonify({"error": "GitHub API request is not allowed"}), 400
+
+    try:
+        token, needs_reconnect = _stored_github_token(get_db())
+    except GithubTokenKeyError as error:
+        app.logger.error("GitHub token key unavailable: %s", error)
+        return jsonify({"error": "GitHub credential storage is unavailable"}), 500
+    if not token:
+        return jsonify({
+            "error": "Connect GitHub before using repository sync",
+            "needs_reconnect": needs_reconnect,
+        }), 401
+
+    try:
+        status, response_body, github_headers = _github_http_request(
+            token,
+            path,
+            method,
+            body,
+        )
+    except GithubApiUnavailable:
+        return jsonify({"error": "GitHub is unavailable"}), 502
+
+    response = app.response_class(
+        response_body,
+        status=status,
+        mimetype="application/json",
+    )
+    response.headers["Cache-Control"] = "no-store"
+    for header in ("X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After"):
+        value = github_headers.get(header)
+        if value is not None:
+            response.headers[header] = value
+    return response
 
 
 @app.route("/api/v1/compile", methods=["POST"])

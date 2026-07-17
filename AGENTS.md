@@ -22,7 +22,7 @@ a self-hostable alternative to Overleaf without compile quotas.
 
 * **Framework**: Python and Flask
 * **LaTeX Compiler**: latexmk with pdfLaTeX, XeLaTeX, and LuaLaTeX
-* **Storage**: SQLite with binary project files stored as Base64
+* **Storage**: SQLite with binary project files stored as Base64 and Fernet-encrypted secrets
 * **API**: RESTful project management and PDF compilation
 * **Real-time Sync**: WebSockets for collaborative editing (future feature)
 
@@ -211,6 +211,10 @@ GET    /api/documents/:id       # Get document by ID
 PUT    /api/documents/:id       # Update document
 DELETE /api/documents/:id       # Delete document
 POST   /api/v1/compile          # Compile a LaTeX project to PDF
+GET    /api/v1/github-token     # Get encrypted PAT configuration status
+PUT    /api/v1/github-token     # Validate and store a PAT
+DELETE /api/v1/github-token     # Delete the stored PAT
+POST   /api/v1/github           # Proxy allowed GitHub repository operations
 ```
 
 ### Request/Response Format

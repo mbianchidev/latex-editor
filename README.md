@@ -106,13 +106,15 @@ LATEX_EDITOR_PORT=8080 docker compose up -d
 
 1. Click **New** → **Import GitHub Folder**, or open **Projects** → **GitHub Settings**
 2. Enter a fine-grained GitHub Personal Access Token with repository `Contents`
-   read and write access. The token is kept in the current browser tab only.
+   read and write access. The backend validates it, encrypts it, and stores only ciphertext
+   in SQLite.
 3. Enter the repository (`owner/repo`), folder (`resume`), and optional branch.
    Leaving the branch blank uses the repository default branch.
 4. Click **Import folder**. The folder becomes a local project and keeps its GitHub
    source link.
 5. Use **Pull latest** to replace the local project with the current linked folder.
-6. Use **Commit changes** to create a commit directly on the linked branch. If the
+6. Use **Commit** in the main project header or **Commit changes** in GitHub Settings
+   to create a commit directly on the linked branch. If the
    branch changed since the last import or pull, the editor stops and asks you to pull
    first instead of overwriting remote work.
 
@@ -189,7 +191,7 @@ Your content here.
 
 - **Frontend**: HTML5, CSS3, Vanilla JavaScript (ES6+)
 - **Libraries**: PDF.js, CodeMirror, JSZip
-- **Backend**: Python/Flask, pypdf, SQLite, and rate limiting (flask-limiter)
+- **Backend**: Python/Flask, pypdf, cryptography, SQLite, and rate limiting (flask-limiter)
 - **Compiler**: TeX Live with latexmk, pdfLaTeX, XeLaTeX, and LuaLaTeX
 - **Database**: SQLite (bind-mounted to host filesystem)
 - **Container**: Docker with nginx (reverse proxy + CSP headers)
@@ -208,6 +210,12 @@ LATEX_EDITOR_DATA=/path/to/your/data
 ```
 
 The storage path is visible in the projects drawer footer.
+
+The GitHub PAT is encrypted before it is stored in SQLite, and GitHub API calls are proxied by
+the backend so the saved PAT is never returned to the browser. For stronger separation from
+database backups, set `GITHUB_TOKEN_ENCRYPTION_KEY` in `.env`. Without it, the app generates a
+`0600` key file beside the database; copying the whole data directory copies both the encrypted
+PAT and its key.
 
 Compilation defaults can also be changed in `.env`:
 
