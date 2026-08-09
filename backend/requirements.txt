@@ -3,6 +3,6 @@ flask-cors==6.0.5
 flask-limiter==4.1.1
 cryptography==49.0.0
 gunicorn==26.0.0
-pypdf==6.14.2
+pypdf==6.15.0
 pytest==9.1.1
 pytest-cov==7.1.0
