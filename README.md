@@ -7,7 +7,7 @@
 A free, open source LaTeX editor with compiler-accurate PDF preview. Think Overleaf, but
 self-hostable and without compilation size limit, nor any other limit.
 
-<img width="1710" height="950" alt="image" src="https://github.com/user-attachments/assets/c951281a-1ad6-4c8c-bf0e-1af0c420b2a2" />
+<img width="1710" height="950" alt="image" src="https://github.com/user-attachments/assets/55dadadf-e9a0-4b4c-b3bc-6e3de048f3ea" />
 
 ## ✨ Features
 
