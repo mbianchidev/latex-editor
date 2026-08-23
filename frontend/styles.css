@@ -1577,6 +1577,32 @@ button {
   transform: translateX(-50%);
 }
 
+.rail-button::after {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + var(--space-2));
+  z-index: 70;
+  padding: var(--space-1) var(--space-2);
+  color: white;
+  background: var(--color-deep-ink);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  content: attr(data-label);
+  font-size: var(--text-xs);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-0.25rem, -50%);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+  white-space: nowrap;
+}
+
+.rail-button:hover::after,
+.rail-button:focus-visible::after {
+  opacity: 1;
+  transform: translate(0, -50%);
+}
+
 .rail-button:focus-visible {
   outline-color: var(--color-accent-light);
 }
@@ -1761,6 +1787,11 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.project-card-source.unlinked {
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-style: italic;
+}
 .project-card-actions .icon-btn {
   width: 24px;
   height: 24px;
@@ -1911,6 +1942,50 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0.75rem;
+}
+.github-project-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+}
+.github-project-context > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.github-project-context div > span {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.github-project-context strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.github-project-state {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.45rem;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-primary);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.github-project-state.linked {
+  color: var(--color-accent-deep);
+  background: var(--color-accent-light);
+  border-color: var(--color-accent);
+}
+.github-unlink {
+  color: var(--color-error);
 }
 .github-source-wide {
   grid-column: 1 / -1;

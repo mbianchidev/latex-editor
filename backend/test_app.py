@@ -1064,6 +1064,55 @@ class TestProjectGithubLink:
         assert clear.status_code == 200
         assert clear.get_json()["github"] is None
 
+    def test_projects_keep_distinct_github_links(self, client):
+        first_link = {
+            "repo": "example/research-paper",
+            "path": "paper",
+            "branch": "main",
+            "sha": "a" * 40,
+            "manifest": {}
+        }
+        second_link = {
+            "repo": "example/course-notes",
+            "path": "notes",
+            "branch": "drafts",
+            "sha": "b" * 40,
+            "manifest": {}
+        }
+
+        first = client.post("/api/v1/projects", json={
+            "name": "Research Paper",
+            "files": {"main.tex": "first"},
+            "github": first_link
+        }).get_json()
+        second = client.post("/api/v1/projects", json={
+            "name": "Course Notes",
+            "files": {"main.tex": "second"},
+            "github": second_link
+        }).get_json()
+        unlinked = client.post("/api/v1/projects", json={
+            "name": "Blank Document",
+            "files": {"main.tex": "blank"}
+        }).get_json()
+
+        assert client.get(
+            f"/api/v1/projects/{first['id']}"
+        ).get_json()["github"] == first_link
+        assert client.get(
+            f"/api/v1/projects/{second['id']}"
+        ).get_json()["github"] == second_link
+        assert client.get(
+            f"/api/v1/projects/{unlinked['id']}"
+        ).get_json()["github"] is None
+
+        projects = {
+            project["id"]: project["github"]
+            for project in client.get("/api/v1/projects").get_json()["projects"]
+        }
+        assert projects[first["id"]]["repo"] == first_link["repo"]
+        assert projects[second["id"]]["repo"] == second_link["repo"]
+        assert projects[unlinked["id"]] is None
+
     @pytest.mark.parametrize("github", [
         {
             "path": "resume",

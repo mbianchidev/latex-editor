@@ -119,6 +119,7 @@ const state = {
   githubSha: null,
   githubManifest: {},
   githubSyncInProgress: false,
+  githubModalMode: 'project',
   sidebarCollapsed: false,
 };
 
@@ -201,12 +202,20 @@ const elements = {
   githubBranch: document.getElementById('githubBranch'),
   githubRepoGroup: document.getElementById('githubRepoGroup'),
   githubStatus: document.getElementById('githubStatus'),
+  githubModalEyebrow: document.getElementById('githubModalEyebrow'),
+  githubModalTitle: document.getElementById('githubModalTitle'),
+  githubProjectContext: document.getElementById('githubProjectContext'),
+  githubProjectName: document.getElementById('githubProjectName'),
+  githubProjectState: document.getElementById('githubProjectState'),
   githubLinkedSource: document.getElementById('githubLinkedSource'),
   githubLinkedSourcePath: document.getElementById('githubLinkedSourcePath'),
   githubLinkedSourceSha: document.getElementById('githubLinkedSourceSha'),
+  githubRepoHint: document.getElementById('githubRepoHint'),
   githubSave: document.getElementById('githubSave'),
   githubDisconnect: document.getElementById('githubDisconnect'),
+  githubUnlink: document.getElementById('githubUnlink'),
   githubImport: document.getElementById('githubImport'),
+  githubLink: document.getElementById('githubLink'),
   githubPull: document.getElementById('githubPull'),
   githubCommit: document.getElementById('githubCommit'),
   // Generic prompt/confirm modal
@@ -854,7 +863,7 @@ function initializeEventListeners() {
   if (elements.newProjectGithubBtn) {
     elements.newProjectGithubBtn.addEventListener('click', () => {
       closeNewProjectModal();
-      openGithubModal();
+      openGithubModal('import');
     });
   }
 
@@ -956,7 +965,7 @@ function initializeEventListeners() {
   // GitHub modal
   if (elements.drawerGithubBtn) {
     elements.drawerGithubBtn.addEventListener('click', () => {
-      openGithubModal();
+      openGithubModal('project');
     });
   }
   if (elements.closeGithubModal) {
@@ -973,8 +982,14 @@ function initializeEventListeners() {
   if (elements.githubDisconnect) {
     elements.githubDisconnect.addEventListener('click', disconnectGithub);
   }
+  if (elements.githubUnlink) {
+    elements.githubUnlink.addEventListener('click', unlinkCurrentProjectFromGithub);
+  }
   if (elements.githubImport) {
     elements.githubImport.addEventListener('click', importFromGithub);
+  }
+  if (elements.githubLink) {
+    elements.githubLink.addEventListener('click', linkCurrentProjectFromGithub);
   }
   if (elements.githubPull) {
     elements.githubPull.addEventListener('click', pullFromGithub);
@@ -3366,6 +3381,7 @@ function setSidebarCollapsed(collapsed, options = {}) {
   elements.projectsBtn.setAttribute('aria-expanded', String(!state.sidebarCollapsed));
   elements.closeDrawer.setAttribute('aria-expanded', String(!state.sidebarCollapsed));
   elements.closeDrawer.title = state.sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  elements.closeDrawer.dataset.label = state.sidebarCollapsed ? 'Expand' : 'Collapse';
   elements.closeDrawer.setAttribute(
     'aria-label',
     state.sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'
@@ -3454,7 +3470,9 @@ function renderProjectsList(projects) {
           </svg>
           <span>${escapeHtml(p.github.repo)}${p.github.path ? `/${escapeHtml(p.github.path)}` : ''} · ${escapeHtml(p.github.branch)}</span>
         </div>`
-      : '';
+      : `<div class="project-card-source unlinked">
+          <span>Not linked to GitHub</span>
+        </div>`;
     return `<article class="project-card${isActive ? ' active' : ''}" data-id="${escapeHtml(p.id)}">
       <button class="project-card-open" type="button" data-id="${escapeHtml(p.id)}"
              aria-current="${isActive ? 'page' : 'false'}">
@@ -3465,6 +3483,14 @@ function renderProjectsList(projects) {
         ${githubSource}
       </button>
       <div class="project-card-actions">
+          <button class="icon-btn" type="button"
+                  title="GitHub settings for ${escapeHtml(p.name)}"
+                  aria-label="GitHub settings for ${escapeHtml(p.name)}"
+                  data-action="github" data-id="${escapeHtml(p.id)}">
+            <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+            </svg>
+          </button>
           <button class="icon-btn" type="button" title="Rename"
                   aria-label="Rename ${escapeHtml(p.name)}"
                   data-action="rename" data-id="${escapeHtml(p.id)}">
@@ -3489,6 +3515,17 @@ function renderProjectsList(projects) {
   elements.projectsList.querySelectorAll('.project-card-open').forEach(button => {
     button.addEventListener('click', () => {
       openProject(button.dataset.id);
+    });
+  });
+  elements.projectsList.querySelectorAll('[data-action="github"]').forEach(btn => {
+    btn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      if (state.currentProjectId !== btn.dataset.id) {
+        await openProject(btn.dataset.id);
+      }
+      if (state.currentProjectId === btn.dataset.id) {
+        await openGithubModal('project');
+      }
     });
   });
   elements.projectsList.querySelectorAll('[data-action="rename"]').forEach(btn => {
@@ -3753,25 +3790,30 @@ const GITHUB_REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
 const GITHUB_BRANCH_FORBIDDEN = /[\x00-\x20\x7f~^:?*\[\\]/;
 const GITHUB_FILE_MODES = new Set(['100644', '100755', '120000']);
 
-async function openGithubModal() {
+async function openGithubModal(mode = 'project') {
+  state.githubModalMode = mode === 'import' ? 'import' : 'project';
   elements.githubModalOverlay.classList.add('open');
   elements.githubToken.value = '';
 
-  const link = getCurrentGithubLink();
-  elements.githubRepo.value = link?.repo
-    || localStorage.getItem('latexEditor_githubRepo')
-    || '';
-  elements.githubPath.value = link?.path
-    ?? localStorage.getItem('latexEditor_githubPath')
-    ?? '';
-  elements.githubBranch.value = link?.branch
-    || localStorage.getItem('latexEditor_githubBranch')
-    || '';
+  const link = state.githubModalMode === 'project' ? getCurrentGithubLink() : null;
+  if (state.githubModalMode === 'project') {
+    elements.githubRepo.value = link?.repo || '';
+    elements.githubPath.value = link?.path || '';
+    elements.githubBranch.value = link?.branch || '';
+  } else {
+    elements.githubRepo.value = localStorage.getItem('latexEditor_githubRepo') || '';
+    elements.githubPath.value = localStorage.getItem('latexEditor_githubPath') || '';
+    elements.githubBranch.value = localStorage.getItem('latexEditor_githubBranch') || '';
+  }
 
   await loadGithubConnection();
   refreshGithubModal();
   if (state.githubTokenConfigured) {
-    elements.githubRepo.focus();
+    if (state.githubModalMode === 'project' && link) {
+      elements.githubPull.focus();
+    } else {
+      elements.githubRepo.focus();
+    }
   } else {
     elements.githubToken.focus();
   }
@@ -3874,7 +3916,22 @@ async function loadGithubConnection() {
 
 function refreshGithubModal() {
   const connected = state.githubTokenConfigured;
-  const link = getCurrentGithubLink();
+  const projectMode = state.githubModalMode === 'project';
+  const link = projectMode ? getCurrentGithubLink() : null;
+  const hasProject = Boolean(state.projectMode && Object.keys(state.projectFiles).length);
+  const projectName = state.currentProjectName || 'Unsaved document';
+
+  elements.githubModalEyebrow.textContent = projectMode ? 'Project source' : 'New project';
+  elements.githubModalTitle.textContent = projectMode
+    ? `GitHub for “${projectName}”`
+    : 'Import GitHub folder';
+  elements.githubProjectName.textContent = projectMode
+    ? projectName
+    : 'New linked project';
+  elements.githubProjectState.textContent = projectMode
+    ? (link ? 'Linked' : 'Not linked')
+    : 'Created separately';
+  elements.githubProjectState.classList.toggle('linked', Boolean(projectMode && link));
 
   elements.githubStatus.className = state.githubTokenNeedsReconnect
     ? 'github-status error'
@@ -3883,23 +3940,32 @@ function refreshGithubModal() {
     ? 'Stored PAT cannot be decrypted. Connect GitHub again.'
     : (
       connected
-        ? `Encrypted PAT configured${state.githubLogin ? ` for ${state.githubLogin}` : ''}`
+        ? `Shared GitHub credential configured${state.githubLogin ? ` for ${state.githubLogin}` : ''}`
         : ''
     );
   elements.githubStatus.style.display = (
     connected || state.githubTokenNeedsReconnect
   ) ? 'block' : 'none';
   elements.githubToken.placeholder = connected
-    ? 'Encrypted PAT stored locally'
+    ? 'Encrypted shared PAT stored locally'
     : 'github_pat_xxxxxxxxxxxx';
   elements.githubSave.style.display = connected ? 'none' : '';
   elements.githubDisconnect.style.display = connected ? '' : 'none';
-  elements.githubRepoGroup.style.display = connected ? '' : 'none';
-  elements.githubImport.style.display = connected ? '' : 'none';
-  elements.githubPull.style.display = connected && link ? '' : 'none';
-  elements.githubCommit.style.display = connected && link ? '' : 'none';
+  elements.githubRepoGroup.style.display = (
+    connected && (!projectMode || !link)
+  ) ? '' : 'none';
+  elements.githubImport.style.display = connected && !projectMode ? '' : 'none';
+  elements.githubLink.style.display = (
+    connected && projectMode && !link && hasProject
+  ) ? '' : 'none';
+  elements.githubPull.style.display = connected && projectMode && link ? '' : 'none';
+  elements.githubCommit.style.display = connected && projectMode && link ? '' : 'none';
+  elements.githubUnlink.style.display = projectMode && link ? '' : 'none';
+  elements.githubRepoHint.textContent = projectMode
+    ? 'Link & pull replaces this project’s local files with the selected GitHub folder. Other projects are unchanged.'
+    : 'Imports this folder as a separate linked project. Existing projects and their links are unchanged.';
 
-  if (link) {
+  if (projectMode && link) {
     const folder = link.path ? `/${link.path}` : '';
     elements.githubLinkedSourcePath.textContent =
       `${link.repo}${folder} @ ${link.branch}`;
@@ -3917,9 +3983,12 @@ function setGithubControlsDisabled(disabled) {
   [
     elements.githubSave,
     elements.githubDisconnect,
+    elements.githubUnlink,
     elements.githubImport,
+    elements.githubLink,
     elements.githubPull,
     elements.githubCommit,
+    elements.pullGithubBtn,
     elements.commitGithubBtn,
     elements.githubRepo,
     elements.githubPath,
@@ -3971,7 +4040,7 @@ async function disconnectGithub() {
     clearLegacyGithubTokenStorage();
     elements.githubToken.value = '';
     refreshGithubModal();
-    showSuccessToast('Disconnected from GitHub');
+    showSuccessToast('Forgot the shared GitHub PAT; project links are unchanged');
   } catch (error) {
     elements.githubStatus.className = 'github-status error';
     elements.githubStatus.textContent = `Disconnect failed: ${error.message}`;
@@ -4378,10 +4447,125 @@ async function runGithubOperation(label, operation) {
   }
 }
 
+async function linkCurrentProjectFromGithub() {
+  if (!state.projectMode || Object.keys(state.projectFiles).length === 0) {
+    showErrorToast('Create or open a project before linking GitHub');
+    return;
+  }
+  if (getCurrentGithubLink()) {
+    showErrorToast('This project is already linked to GitHub');
+    return;
+  }
+  if (!(await loadGithubConnection())) {
+    showErrorToast('Save a GitHub PAT first');
+    return;
+  }
+
+  let config;
+  try {
+    config = getGithubImportConfig();
+  } catch (error) {
+    showErrorToast(error.message);
+    return;
+  }
+
+  const confirmed = await showConfirmModal(
+    'Link and Pull',
+    `Replace all local files in “${state.currentProjectName || 'this project'}” `
+      + `with ${config.repo}/${config.path || ''} and link only this project?`,
+    { okLabel: 'Link & pull' }
+  );
+  if (!confirmed) return;
+
+  try {
+    const saved = await saveProjectToBackend({ throwOnError: true });
+    if (!saved) return;
+  } catch (error) {
+    console.error('Failed to save project before GitHub linking:', error);
+    showErrorToast(`Save failed: ${error.message}`);
+    return;
+  }
+  const projectId = state.currentProjectId;
+  if (!projectId) {
+    showErrorToast('Save the project locally before linking GitHub');
+    return;
+  }
+
+  await runGithubOperation('Link', async () => {
+    showStatus('Linking project to GitHub...', 'info');
+    const snapshot = await fetchGithubFolderSnapshot(config);
+    assertActiveProject(projectId);
+    const project = await backendProjectRequest(
+      `${API_BASE}/projects/${projectId}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: serializeProjectFiles(snapshot.files),
+          main_file: snapshot.mainFile,
+          github: githubLinkFromSnapshot(snapshot),
+        }),
+      }
+    );
+
+    assertActiveProject(projectId);
+    restoreProject(project, { showToast: false });
+    saveProjectToLocalStorage();
+    loadProjectsList();
+    closeGithubModal(true);
+    compile();
+    showSuccessToast(`Linked ${state.currentProjectName} to ${snapshot.repo}`);
+    showStatus('Project linked to GitHub', 'success');
+  });
+}
+
+async function unlinkCurrentProjectFromGithub() {
+  const link = getCurrentGithubLink();
+  const projectId = state.currentProjectId;
+  if (!link || !projectId) {
+    showErrorToast('The current project is not linked to GitHub');
+    return;
+  }
+
+  const confirmed = await showConfirmModal(
+    'Unlink Project',
+    `Stop syncing “${state.currentProjectName || 'this project'}” with `
+      + `${link.repo}/${link.path || ''}? Local files and the shared PAT stay unchanged.`,
+    { okLabel: 'Unlink project' }
+  );
+  if (!confirmed) return;
+
+  await runGithubOperation('Unlink', async () => {
+    if (
+      state.currentFile
+      && !isBinaryContent(state.projectFiles[state.currentFile])
+    ) {
+      state.projectFiles[state.currentFile] = state.currentLatex;
+    }
+    await backendProjectRequest(`${API_BASE}/projects/${projectId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: serializeProjectFiles(),
+        main_file: state.mainFile,
+        engine: state.engine,
+        github: null,
+      }),
+    });
+    assertActiveProject(projectId);
+    clearProjectGithubLink();
+    saveProjectToLocalStorage();
+    loadProjectsList();
+    refreshGithubModal();
+    showSuccessToast(`Unlinked ${state.currentProjectName} from GitHub`);
+    showStatus('Project is no longer linked to GitHub', 'success');
+  });
+}
+
 async function importFromGithub() {
   if (!(await loadGithubConnection())) {
     showErrorToast('Connect to GitHub first');
-    openGithubModal();
+    openGithubModal('import');
     return;
   }
 
