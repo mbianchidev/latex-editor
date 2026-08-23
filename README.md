@@ -73,12 +73,14 @@ LATEX_EDITOR_PORT=8080 docker compose up -d
 
 | Panel | Description |
 |-------|-------------|
-| **Header Bar** | Projects drawer, new document, upload ZIP, download .tex/.zip/PDF buttons |
-| **Projects Drawer** (left slide-in) | Manage saved projects — open, rename, delete, GitHub settings |
-| **File Tree** (left) | Shown when a ZIP project is loaded — manage files here |
+| **Header Bar** | New project, compact GitHub pull/commit shortcuts, and one download menu |
+| **Workspace Sidebar** (left) | Switch projects and browse the active project's files; collapse it to an icon rail |
 | **Editor** (center-left) | Write LaTeX and select the project compiler |
 | **Preview** (right) | The actual compiled PDF, rendered page by page |
 | **Status Bar** | Compilation status and cursor position |
+
+In the dark workspace rail, the folder icon opens the project switcher and the document icon
+opens the active project's files. Hover or focus any rail icon to see its label.
 
 ### Keyboard Shortcuts
 
@@ -98,30 +100,39 @@ LATEX_EDITOR_PORT=8080 docker compose up -d
 
 ### Project Management
 
-- Click **Projects** in the header to open the projects drawer
+- Projects stay available in the left sidebar for quick switching
+- Click the sidebar chevron to collapse the panel to a thin icon rail without hiding navigation
+- The active project's files appear below the project list
 - All projects are persisted in a SQLite database on your host machine at `~/.latex-editor/data/` (customisable — see [Data Storage](#-data-storage))
 - Project names must be unique — duplicates are rejected
-- Open, rename, or delete projects from the drawer
-- The storage path and database size are shown at the bottom of the projects drawer
+- Open, rename, or delete projects directly from the sidebar
+- The storage path and database size are shown at the bottom of the sidebar
 
 ### GitHub Integration
 
-1. Click **New** → **Import GitHub Folder**, or open **Projects** → **GitHub Settings**
-2. Enter a fine-grained GitHub Personal Access Token with repository `Contents`
+1. Open the GitHub icon in the workspace rail and enter a fine-grained Personal Access Token
+   with repository `Contents`
    read and write access. The backend validates it, encrypts it, and stores only ciphertext
-   in SQLite.
-3. Enter the repository (`owner/repo`), folder (`resume`), and optional branch.
+   in SQLite. This credential is shared, but repository links are stored separately per project.
+2. To create a new linked project, click **New** → **Import GitHub Folder**.
+3. To link an existing local project, select its GitHub button, enter the repository
+   (`owner/repo`), folder (`resume`), and optional branch, then choose **Link & pull**.
+   This replaces that project's local files with the selected GitHub folder.
    Leaving the branch blank uses the repository default branch.
-4. Click **Import folder**. The folder becomes a local project and keeps its GitHub
-   source link.
-5. Use **Pull latest** to replace the local project with the current linked folder.
-6. Use **Commit** in the main project header or **Commit changes** in GitHub Settings
+4. Use the compact **Pull** button in the header, or **Pull latest** in project GitHub settings, to
+   replace the local project with the current linked folder.
+5. Use **Commit** in the header or **Commit changes** in project GitHub settings
    to create a commit directly on the linked branch. If the
    branch changed since the last import or pull, the editor stops and asks you to pull
    first instead of overwriting remote work.
+6. **Unlink project** removes only the selected project's source link. **Forget PAT** removes
+   the shared credential without changing any project links.
 
 Only files inside the linked folder are managed. Files elsewhere in the repository
 remain unchanged. Protected branches require a writable branch.
+
+Pulling is manual. Browser auto-save writes to local SQLite and does not automatically fetch
+or push GitHub changes.
 
 ### Compilation and PDF Export
 
@@ -130,8 +141,8 @@ remain unchanged. Protected branches require a writable branch.
 3. The complete project is compiled with `latexmk`; includes, classes, images, and fonts are
    resolved by TeX rather than approximated as HTML.
 4. The status bar reports the exact page count.
-5. PDF export downloads that compiled PDF directly. If the source changed after the last
-   compile, export recompiles first.
+5. Use **Download** to choose the compiled PDF, current `.tex` file, or full project ZIP.
+   PDF export recompiles first when the source changed after the last compile.
 
 XeLaTeX is the default and is required by projects that use `fontspec`, such as
 `russell.cls` CVs. The selected engine is stored per project.
@@ -141,7 +152,9 @@ preference is stored in the browser and remains off by default.
 
 The status bar also shows non-blocking warnings for likely literal percent signs such as `100%`,
 ampersands outside alignment environments, and unmatched `{` or `}`. Escape literal special
-characters as `\%` and `\&`. Click the warning summary to inspect and jump to a warning.
+characters as `\%` and `\&`. Click a warning to select and highlight its source line. Use the
+**Lines** toggle in the editor toolbar to show or hide line numbers; the preference persists in
+the browser.
 
 ## 📝 LaTeX Examples
 

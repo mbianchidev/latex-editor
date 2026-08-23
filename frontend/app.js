@@ -95,6 +95,10 @@ const state = {
   lastCompileTime: 0,
   autoCompile: false,
   autoCompilePending: false,
+  showLineNumbers: true,
+  lineNumberCount: 0,
+  pendingEditorLineDelta: null,
+  highlightedWarningLine: null,
   syntaxWarnings: [],
   // Multi-file project support
   projectFiles: {},
@@ -116,6 +120,8 @@ const state = {
   githubSha: null,
   githubManifest: {},
   githubSyncInProgress: false,
+  githubModalMode: 'project',
+  sidebarCollapsed: false,
 };
 
 // ============================================
@@ -129,11 +135,17 @@ const elements = {
   compileBtn: document.getElementById('compileBtn'),
   engineSelect: document.getElementById('engineSelect'),
   autoCompile: document.getElementById('autoCompile'),
+  showLineNumbers: document.getElementById('showLineNumbers'),
   newDocBtn: document.getElementById('newDoc'),
   downloadPdfBtn: document.getElementById('downloadPdf'),
   downloadTexBtn: document.getElementById('downloadTex'),
   zipFileInput: document.getElementById('zipFileInput'),
   downloadZipBtn: document.getElementById('downloadZip'),
+  downloadMenu: document.getElementById('downloadMenu'),
+  downloadMenuBtn: document.getElementById('downloadMenuBtn'),
+  downloadMenuList: document.getElementById('downloadMenuList'),
+  githubQuickActions: document.getElementById('githubQuickActions'),
+  pullGithubBtn: document.getElementById('pullGithubBtn'),
   commitGithubBtn: document.getElementById('commitGithubBtn'),
   zoomInBtn: document.getElementById('zoomIn'),
   zoomOutBtn: document.getElementById('zoomOut'),
@@ -141,6 +153,8 @@ const elements = {
   statusText: document.getElementById('statusText'),
   syntaxWarnings: document.getElementById('syntaxWarnings'),
   syntaxWarningPanel: document.getElementById('syntaxWarningPanel'),
+  editorCode: document.getElementById('editorCode'),
+  editorLineNumbers: document.getElementById('editorLineNumbers'),
   lineCol: document.getElementById('lineCol'),
   loadingOverlay: document.getElementById('loadingOverlay'),
   loadingText: document.getElementById('loadingText'),
@@ -155,6 +169,8 @@ const elements = {
   previewPanel: document.getElementById('previewPanel'),
   fileTree: document.getElementById('fileTree'),
   fileTreeContent: document.getElementById('fileTreeContent'),
+  fileTreeProjectName: document.getElementById('fileTreeProjectName'),
+  fileTreeCount: document.getElementById('fileTreeCount'),
   toggleFileTreeBtn: document.getElementById('toggleFileTree'),
   closeFileTreeBtn: document.getElementById('closeFileTree'),
   cleanProjectBtn: document.getElementById('cleanProjectBtn'),
@@ -162,9 +178,9 @@ const elements = {
   newFileBtn: document.getElementById('newFileBtn'),
   newFolderBtn: document.getElementById('newFolderBtn'),
   // Projects drawer
+  workspaceSidebar: document.getElementById('workspaceSidebar'),
   projectsBtn: document.getElementById('projectsBtn'),
   projectsDrawer: document.getElementById('projectsDrawer'),
-  drawerOverlay: document.getElementById('drawerOverlay'),
   closeDrawer: document.getElementById('closeDrawer'),
   projectsList: document.getElementById('projectsList'),
   drawerGithubBtn: document.getElementById('drawerGithubBtn'),
@@ -187,12 +203,20 @@ const elements = {
   githubBranch: document.getElementById('githubBranch'),
   githubRepoGroup: document.getElementById('githubRepoGroup'),
   githubStatus: document.getElementById('githubStatus'),
+  githubModalEyebrow: document.getElementById('githubModalEyebrow'),
+  githubModalTitle: document.getElementById('githubModalTitle'),
+  githubProjectContext: document.getElementById('githubProjectContext'),
+  githubProjectName: document.getElementById('githubProjectName'),
+  githubProjectState: document.getElementById('githubProjectState'),
   githubLinkedSource: document.getElementById('githubLinkedSource'),
   githubLinkedSourcePath: document.getElementById('githubLinkedSourcePath'),
   githubLinkedSourceSha: document.getElementById('githubLinkedSourceSha'),
+  githubRepoHint: document.getElementById('githubRepoHint'),
   githubSave: document.getElementById('githubSave'),
   githubDisconnect: document.getElementById('githubDisconnect'),
+  githubUnlink: document.getElementById('githubUnlink'),
   githubImport: document.getElementById('githubImport'),
+  githubLink: document.getElementById('githubLink'),
   githubPull: document.getElementById('githubPull'),
   githubCommit: document.getElementById('githubCommit'),
   // Generic prompt/confirm modal
@@ -342,11 +366,75 @@ function setAutoCompile(enabled, options = {}) {
   }
 }
 
+function syncEditorScroll() {
+  elements.editorLineNumbers.scrollTop = elements.editor.scrollTop;
+}
+
+function countNewlines(value) {
+  let count = 0;
+  for (let index = value.indexOf('\n'); index !== -1; index = value.indexOf('\n', index + 1)) {
+    count++;
+  }
+  return count;
+}
+
+function updateEditorLineNumbers(force = false, knownLineCount = null) {
+  const lineCount = knownLineCount ?? (countNewlines(elements.editor.value) + 1);
+  if (!force && lineCount === state.lineNumberCount) {
+    syncEditorScroll();
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (let line = 1; line <= lineCount; line++) {
+    const lineNumber = document.createElement('span');
+    lineNumber.className = 'editor-line-number';
+    lineNumber.dataset.line = String(line);
+    lineNumber.textContent = String(line);
+    fragment.appendChild(lineNumber);
+  }
+  elements.editorLineNumbers.replaceChildren(fragment);
+  state.lineNumberCount = lineCount;
+  if (state.highlightedWarningLine) {
+    elements.editorLineNumbers
+      .querySelector(`[data-line="${state.highlightedWarningLine}"]`)
+      ?.classList.add('warning-line');
+  }
+  syncEditorScroll();
+}
+
+function setShowLineNumbers(enabled, options = {}) {
+  const { persist = true } = options;
+  state.showLineNumbers = Boolean(enabled);
+  elements.showLineNumbers.checked = state.showLineNumbers;
+  elements.editorLineNumbers.hidden = !state.showLineNumbers;
+  elements.editorCode.classList.toggle('line-numbers-hidden', !state.showLineNumbers);
+  if (persist) {
+    try {
+      localStorage.setItem('latexEditor_showLineNumbers', String(state.showLineNumbers));
+    } catch (error) {
+      console.error('Failed to save line-number setting:', error);
+    }
+  }
+  updateEditorLineNumbers(true);
+}
+
 function setEditorContent(content, readOnly = false) {
   state.currentLatex = content || '';
   elements.editor.value = state.currentLatex;
   elements.editor.readOnly = readOnly;
+  state.highlightedWarningLine = null;
+  updateEditorLineNumbers(true);
   scheduleSyntaxWarnings(0);
+}
+
+function readLocalStorage(key, fallback = null) {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch (error) {
+    console.error(`Failed to read local setting ${key}:`, error);
+    return fallback;
+  }
 }
 
 // ============================================
@@ -371,6 +459,14 @@ async function init() {
   } catch (e) { /* ignore */ }
   
   initializeEditor();
+  setShowLineNumbers(
+    readLocalStorage('latexEditor_showLineNumbers') !== 'false',
+    { persist: false }
+  );
+  setSidebarCollapsed(
+    readLocalStorage('latexEditor_sidebarCollapsed') === 'true',
+    { persist: false }
+  );
   
   setEditorContent(DEFAULT_TEMPLATE);
   elements.engineSelect.value = state.engine;
@@ -380,18 +476,18 @@ async function init() {
   initAutocomplete();
   
   // Restore zoom from localStorage
-  const savedZoom = localStorage.getItem('latexEditor_zoom');
+  const savedZoom = readLocalStorage('latexEditor_zoom');
   if (savedZoom) setZoom(parseFloat(savedZoom));
-  const savedEngine = localStorage.getItem('latexEditor_engine');
+  const savedEngine = readLocalStorage('latexEditor_engine');
   if (savedEngine) setLatexEngine(savedEngine);
   setAutoCompile(
-    localStorage.getItem('latexEditor_autoCompile') === 'true',
+    readLocalStorage('latexEditor_autoCompile') === 'true',
     { persist: false, schedule: false }
   );
 
   // Always load projects from the backend (authoritative source)
   let restored = false;
-  const lastProjectId = localStorage.getItem('latexEditor_lastProjectId');
+  const lastProjectId = readLocalStorage('latexEditor_lastProjectId');
   if (lastProjectId) {
     restored = await loadLastProjectFromBackend();
   }
@@ -411,6 +507,8 @@ async function init() {
       }
     } catch (e) { /* ignore */ }
   }
+
+  await Promise.all([loadProjectsList(), loadStorageInfo()]);
   
   showStatus('Compiling...', 'info');
   await compile(true);
@@ -421,12 +519,14 @@ async function init() {
 // ============================================
 
 function initializeEditor() {
+  elements.editor.addEventListener('beforeinput', handleEditorBeforeInput);
   // Listen for editor changes
   elements.editor.addEventListener('input', handleEditorChange);
   
   // Listen for cursor position changes
   elements.editor.addEventListener('keyup', updateCursorPosition);
   elements.editor.addEventListener('click', updateCursorPosition);
+  elements.editor.addEventListener('scroll', syncEditorScroll);
   
   // Handle tabs in textarea
   elements.editor.addEventListener('keydown', (e) => {
@@ -668,7 +768,7 @@ function positionAutocomplete() {
   const charWidth = parseFloat(style.fontSize) * 0.6;
 
   const top = lineNum * lineHeight - textarea.scrollTop + 4;
-  const left = colNum * charWidth + parseFloat(style.paddingLeft || 0);
+  const left = textarea.offsetLeft + colNum * charWidth + parseFloat(style.paddingLeft || 0);
 
   dropdown.style.top = Math.min(top, textarea.offsetHeight - 210) + 'px';
   dropdown.style.left = Math.min(left, textarea.offsetWidth - 220) + 'px';
@@ -678,6 +778,47 @@ function hideAutocomplete() {
   autocompleteState.visible = false;
   const dropdown = document.getElementById('autocompleteDropdown');
   if (dropdown) dropdown.classList.remove('visible');
+}
+
+function getDownloadMenuItems() {
+  return Array.from(
+    elements.downloadMenuList.querySelectorAll('.dropdown-item:not([hidden]):not(:disabled)')
+  );
+}
+
+function setDownloadMenuOpen(open, options = {}) {
+  const { focusFirst = false, restoreFocus = false } = options;
+  elements.downloadMenu.classList.toggle('open', open);
+  elements.downloadMenuBtn.setAttribute('aria-expanded', String(open));
+
+  if (open && focusFirst) {
+    getDownloadMenuItems()[0]?.focus();
+  } else if (!open && restoreFocus) {
+    elements.downloadMenuBtn.focus();
+  }
+}
+
+function handleDownloadMenuKeydown(event) {
+  const items = getDownloadMenuItems();
+  if (!items.length) return;
+  const currentIndex = items.indexOf(document.activeElement);
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    items[(currentIndex + 1 + items.length) % items.length].focus();
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    items[(currentIndex - 1 + items.length) % items.length].focus();
+  } else if (event.key === 'Home') {
+    event.preventDefault();
+    items[0].focus();
+  } else if (event.key === 'End') {
+    event.preventDefault();
+    items[items.length - 1].focus();
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    setDownloadMenuOpen(false, { restoreFocus: true });
+  }
 }
 
 // ============================================
@@ -697,6 +838,9 @@ function initializeEventListeners() {
   elements.autoCompile.addEventListener('change', () => {
     setAutoCompile(elements.autoCompile.checked);
   });
+  elements.showLineNumbers.addEventListener('change', () => {
+    setShowLineNumbers(elements.showLineNumbers.checked);
+  });
   elements.syntaxWarnings.addEventListener('click', () => {
     const shouldOpen = elements.syntaxWarningPanel.hidden;
     elements.syntaxWarningPanel.hidden = !shouldOpen;
@@ -706,6 +850,9 @@ function initializeEventListeners() {
     if (event.key === 'Escape' && !elements.syntaxWarningPanel.hidden) {
       closeSyntaxWarningPanel();
       elements.syntaxWarnings.focus();
+    }
+    if (event.key === 'Escape' && elements.downloadMenu.classList.contains('open')) {
+      setDownloadMenuOpen(false, { restoreFocus: true });
     }
   });
   
@@ -735,14 +882,13 @@ function initializeEventListeners() {
   if (elements.newProjectGithubBtn) {
     elements.newProjectGithubBtn.addEventListener('click', () => {
       closeNewProjectModal();
-      openGithubModal();
+      openGithubModal('import');
     });
   }
 
   // New project from sidebar
   if (elements.drawerNewProjectBtn) {
     elements.drawerNewProjectBtn.addEventListener('click', () => {
-      closeProjectsDrawer();
       openNewProjectModal();
     });
   }
@@ -750,10 +896,42 @@ function initializeEventListeners() {
   // ZIP upload (hidden input, triggered by modal)
   elements.zipFileInput.addEventListener('change', handleZipUpload);
   
-  // Download buttons
-  elements.downloadPdfBtn.addEventListener('click', downloadPDF);
-  elements.downloadTexBtn.addEventListener('click', downloadTeX);
-  elements.downloadZipBtn.addEventListener('click', downloadProjectZip);
+  // Download menu
+  elements.downloadMenuBtn.addEventListener('click', () => {
+    setDownloadMenuOpen(!elements.downloadMenu.classList.contains('open'));
+  });
+  elements.downloadMenuBtn.addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setDownloadMenuOpen(true, { focusFirst: true });
+    }
+  });
+  elements.downloadMenuList.addEventListener('keydown', handleDownloadMenuKeydown);
+  elements.downloadMenu.addEventListener('focusout', () => {
+    requestAnimationFrame(() => {
+      if (!elements.downloadMenu.contains(document.activeElement)) {
+        setDownloadMenuOpen(false);
+      }
+    });
+  });
+  document.addEventListener('click', event => {
+    if (!elements.downloadMenu.contains(event.target)) {
+      setDownloadMenuOpen(false);
+    }
+  });
+  elements.downloadPdfBtn.addEventListener('click', () => {
+    setDownloadMenuOpen(false);
+    downloadPDF();
+  });
+  elements.downloadTexBtn.addEventListener('click', () => {
+    setDownloadMenuOpen(false);
+    downloadTeX();
+  });
+  elements.downloadZipBtn.addEventListener('click', () => {
+    setDownloadMenuOpen(false);
+    downloadProjectZip();
+  });
+  elements.pullGithubBtn.addEventListener('click', pullFromGithub);
   elements.commitGithubBtn.addEventListener('click', commitFromProjectPage);
   
   // Zoom controls
@@ -798,17 +976,15 @@ function initializeEventListeners() {
     elements.projectsBtn.addEventListener('click', openProjectsDrawer);
   }
   if (elements.closeDrawer) {
-    elements.closeDrawer.addEventListener('click', closeProjectsDrawer);
-  }
-  if (elements.drawerOverlay) {
-    elements.drawerOverlay.addEventListener('click', closeProjectsDrawer);
+    elements.closeDrawer.addEventListener('click', () => {
+      setSidebarCollapsed(!state.sidebarCollapsed);
+    });
   }
 
   // GitHub modal
   if (elements.drawerGithubBtn) {
     elements.drawerGithubBtn.addEventListener('click', () => {
-      closeProjectsDrawer();
-      openGithubModal();
+      openGithubModal('project');
     });
   }
   if (elements.closeGithubModal) {
@@ -825,8 +1001,14 @@ function initializeEventListeners() {
   if (elements.githubDisconnect) {
     elements.githubDisconnect.addEventListener('click', disconnectGithub);
   }
+  if (elements.githubUnlink) {
+    elements.githubUnlink.addEventListener('click', unlinkCurrentProjectFromGithub);
+  }
   if (elements.githubImport) {
     elements.githubImport.addEventListener('click', importFromGithub);
+  }
+  if (elements.githubLink) {
+    elements.githubLink.addEventListener('click', linkCurrentProjectFromGithub);
   }
   if (elements.githubPull) {
     elements.githubPull.addEventListener('click', pullFromGithub);
@@ -843,13 +1025,52 @@ function initializeEventListeners() {
 // EDITOR HANDLERS
 // ============================================
 
+function handleEditorBeforeInput(event) {
+  const { inputType } = event;
+  const value = elements.editor.value;
+  const start = elements.editor.selectionStart;
+  const end = elements.editor.selectionEnd;
+  let removed = value.slice(start, end);
+  let inserted = null;
+
+  if (inputType === 'insertLineBreak' || inputType === 'insertParagraph') {
+    inserted = '\n';
+  } else if (inputType.startsWith('insert') && typeof event.data === 'string') {
+    inserted = event.data;
+  } else if (inputType.startsWith('delete')) {
+    inserted = '';
+    if (start === end && inputType === 'deleteContentBackward') {
+      removed = value.slice(Math.max(0, start - 1), start);
+    } else if (start === end && inputType === 'deleteContentForward') {
+      removed = value.slice(start, start + 1);
+    } else if (start === end) {
+      state.pendingEditorLineDelta = null;
+      return;
+    }
+  }
+
+  state.pendingEditorLineDelta = inserted === null
+    ? null
+    : countNewlines(inserted) - countNewlines(removed);
+}
+
 function handleEditorChange(e) {
   if (state.githubSyncInProgress || state.projectSwitchInProgress) {
     e.target.value = state.currentLatex;
+    state.pendingEditorLineDelta = null;
     showErrorToast('Wait for the current project operation to finish');
     return;
   }
+  const lineDelta = state.pendingEditorLineDelta;
+  state.pendingEditorLineDelta = null;
   state.currentLatex = e.target.value;
+  clearWarningLineHighlight();
+  updateEditorLineNumbers(
+    false,
+    Number.isInteger(lineDelta)
+      ? Math.max(1, state.lineNumberCount + lineDelta)
+      : null
+  );
   markCompileDirty();
   
   // Update project file if in project mode
@@ -933,15 +1154,36 @@ function closeSyntaxWarningPanel() {
 }
 
 function focusEditorWarning(warning) {
-  const lines = state.currentLatex.split('\n');
+  const lines = elements.editor.value.split('\n');
+  const line = Math.min(Math.max(1, warning.line), lines.length);
   let offset = 0;
-  for (let index = 0; index < warning.line - 1; index++) {
+  for (let index = 0; index < line - 1; index++) {
     offset += lines[index].length + 1;
   }
-  offset += Math.max(0, warning.column - 1);
+  const lineEnd = offset + lines[line - 1].length;
   elements.editor.focus();
-  elements.editor.setSelectionRange(offset, offset + 1);
+  elements.editor.setSelectionRange(offset, lineEnd);
+  const lineHeight = parseFloat(getComputedStyle(elements.editor).lineHeight);
+  elements.editor.scrollTop = Math.max(
+    0,
+    (line - 1) * lineHeight - elements.editor.clientHeight / 3
+  );
+  highlightWarningLine(line);
+  syncEditorScroll();
   updateCursorPosition();
+}
+
+function clearWarningLineHighlight() {
+  elements.editorLineNumbers.querySelector('.warning-line')?.classList.remove('warning-line');
+  state.highlightedWarningLine = null;
+}
+
+function highlightWarningLine(line) {
+  clearWarningLineHighlight();
+  state.highlightedWarningLine = line;
+  elements.editorLineNumbers
+    .querySelector(`[data-line="${line}"]`)
+    ?.classList.add('warning-line');
 }
 
 function cancelAutoCompile() {
@@ -1336,6 +1578,10 @@ function setProjectSwitchInProgress(inProgress) {
   state.projectSwitchInProgress = inProgress;
   refreshProjectGithubActions();
   elements.fileTree.style.pointerEvents = inProgress ? 'none' : '';
+  elements.projectsList.setAttribute('aria-busy', String(inProgress));
+  elements.projectsList.querySelectorAll('.project-card-open').forEach(button => {
+    button.disabled = inProgress;
+  });
   if (elements.newDocBtn) {
     elements.newDocBtn.disabled = inProgress;
   }
@@ -1411,11 +1657,12 @@ Start writing your document here.
 
   buildFileTree(state.projectFiles);
   elements.fileTree.classList.add('visible');
-  elements.toggleFileTreeBtn.style.display = 'inline-block';
-  elements.downloadZipBtn.style.display = 'inline-block';
+  elements.toggleFileTreeBtn.disabled = false;
+  elements.downloadZipBtn.disabled = false;
 
   saveProjectToLocalStorage();
   await saveProjectToBackend({ throwOnError: true });
+  loadProjectsList();
 
   showSuccessToast(`Created project: ${projectName}`);
   compile(true);
@@ -1496,11 +1743,12 @@ This is your new LaTeX project. Edit this file or create new sections.
 
   buildFileTree(state.projectFiles);
   elements.fileTree.classList.add('visible');
-  elements.toggleFileTreeBtn.style.display = 'inline-block';
-  elements.downloadZipBtn.style.display = 'inline-block';
+  elements.toggleFileTreeBtn.disabled = false;
+  elements.downloadZipBtn.disabled = false;
 
   saveProjectToLocalStorage();
   await saveProjectToBackend({ throwOnError: true });
+  loadProjectsList();
 
   showSuccessToast(`Created project: ${projectName}`);
   compile(true);
@@ -1544,7 +1792,6 @@ async function handleNewProjectCreate(type) {
   }
 
   closeNewProjectModal();
-  closeProjectsDrawer();
 
   const switchesProject = type === 'blank' || type === 'multifile';
   if (switchesProject) {
@@ -1659,11 +1906,13 @@ function getCurrentGithubLink() {
 
 function refreshProjectGithubActions() {
   const linked = Boolean(state.currentProjectId && getCurrentGithubLink());
-  elements.commitGithubBtn.style.display = linked ? '' : 'none';
-  elements.commitGithubBtn.disabled = (
+  const disabled = (
     state.githubSyncInProgress
     || state.projectSwitchInProgress
   );
+  elements.githubQuickActions.hidden = !linked;
+  elements.pullGithubBtn.disabled = disabled;
+  elements.commitGithubBtn.disabled = disabled;
 }
 
 function serializeProjectFiles(files = state.projectFiles) {
@@ -1974,8 +2223,8 @@ function restoreProject(project, options = {}) {
 
   buildFileTree(state.projectFiles);
   elements.fileTree.classList.add('visible');
-  elements.toggleFileTreeBtn.style.display = 'inline-block';
-  elements.downloadZipBtn.style.display = 'inline-block';
+  elements.toggleFileTreeBtn.disabled = false;
+  elements.downloadZipBtn.disabled = false;
 
   // Save project ID for next restart
   localStorage.setItem('latexEditor_lastProjectId', project.id);
@@ -2024,8 +2273,8 @@ function loadProjectFromLocalStorage() {
     // Build and show file tree
     buildFileTree(state.projectFiles);
     elements.fileTree.classList.add('visible');
-    elements.toggleFileTreeBtn.style.display = 'inline-block';
-    elements.downloadZipBtn.style.display = 'inline-block';
+    elements.toggleFileTreeBtn.disabled = false;
+    elements.downloadZipBtn.disabled = false;
     
     showSuccessToast(
       projectData.binaryFilesStripped
@@ -2062,14 +2311,15 @@ function initializeResizer() {
     
     const deltaX = e.clientX - startX;
     const newWidth = startWidth + deltaX;
-    const containerWidth = elements.editorPanel.parentElement.offsetWidth;
+    const containerWidth = (
+      elements.editorPanel.offsetWidth + elements.previewPanel.offsetWidth
+    );
     const minWidth = 300;
     const maxWidth = containerWidth - minWidth;
     
     if (newWidth >= minWidth && newWidth <= maxWidth) {
-      const percentage = (newWidth / containerWidth) * 100;
-      elements.editorPanel.style.width = `${percentage}%`;
-      elements.previewPanel.style.width = `${100 - percentage}%`;
+      elements.editorPanel.style.flex = `0 0 ${newWidth}px`;
+      elements.previewPanel.style.flex = '1 1 0';
     }
   });
   
@@ -2426,8 +2676,8 @@ async function handleZipUpload(event) {
     // Build and show file tree
     buildFileTree(files);
     elements.fileTree.classList.add('visible');
-    elements.toggleFileTreeBtn.style.display = 'inline-block';
-    elements.downloadZipBtn.style.display = 'inline-block';
+    elements.toggleFileTreeBtn.disabled = false;
+    elements.downloadZipBtn.disabled = false;
     
     if (skippedCount > 0 && DEBUG_MODE) {
       console.log(`Filtered out ${skippedCount} macOS metadata files`);
@@ -2463,6 +2713,8 @@ async function handleZipUpload(event) {
           setProjectGithubLink(project.github);
           localStorage.setItem('latexEditor_lastProjectId', project.id);
           saveProjectToLocalStorage();
+          elements.fileTreeProjectName.textContent = project.name;
+          loadProjectsList();
         } else {
           const err = await res.json();
           console.warn('Project save to backend failed:', err.error);
@@ -2493,9 +2745,14 @@ async function handleZipUpload(event) {
  */
 function buildFileTree(files) {
   const tree = {};
+  const filePaths = Object.keys(files);
+  const fileLabel = filePaths.length === 1 ? 'file' : 'files';
+  elements.fileTreeProjectName.textContent = state.currentProjectName || 'Current project';
+  elements.fileTreeCount.textContent = `${filePaths.length} ${fileLabel}`;
+  elements.projectsDrawer.classList.toggle('has-files', filePaths.length > 0);
   
   // Build tree structure
-  for (const path of Object.keys(files)) {
+  for (const path of filePaths) {
     const parts = path.split('/');
     let current = tree;
     
@@ -2542,6 +2799,11 @@ function renderTreeNode(node, container, path) {
     item.dataset.isFile = isFile ? 'true' : 'false';
     item.dataset.name = name;
     item.dataset.isJunk = isJunk ? 'true' : 'false';
+    item.tabIndex = 0;
+    item.setAttribute('role', 'treeitem');
+    if (!isFile) {
+      item.setAttribute('aria-expanded', 'true');
+    }
     
     if (isFile && fullPath === state.currentFile) {
       item.classList.add('active');
@@ -2567,9 +2829,11 @@ function renderTreeNode(node, container, path) {
     
     // Add rename button
     const renameBtn = document.createElement('button');
+    renameBtn.type = 'button';
     renameBtn.className = 'file-action-btn rename-btn';
     renameBtn.innerHTML = '✎';
     renameBtn.title = 'Rename';
+    renameBtn.setAttribute('aria-label', `Rename ${name}`);
     renameBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       if (isFile) {
@@ -2582,9 +2846,11 @@ function renderTreeNode(node, container, path) {
     
     // Add delete button for files and folders
     const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
     deleteBtn.className = 'file-action-btn delete-btn';
     deleteBtn.innerHTML = '×';
     deleteBtn.title = 'Delete';
+    deleteBtn.setAttribute('aria-label', `Delete ${name}`);
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       if (isFile) {
@@ -2603,6 +2869,13 @@ function renderTreeNode(node, container, path) {
       // Click handler for files
       item.addEventListener('click', (e) => {
         if (!e.target.classList.contains('file-action-btn')) {
+          openFile(fullPath, item);
+        }
+      });
+      item.addEventListener('keydown', (event) => {
+        if (event.target !== item) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
           openFile(fullPath, item);
         }
       });
@@ -2625,6 +2898,17 @@ function renderTreeNode(node, container, path) {
           item.classList.toggle('expanded');
           item.classList.toggle('collapsed');
           children.classList.toggle('collapsed');
+          item.setAttribute(
+            'aria-expanded',
+            String(!children.classList.contains('collapsed'))
+          );
+        }
+      });
+      item.addEventListener('keydown', (event) => {
+        if (event.target !== item) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          item.click();
         }
       });
       
@@ -2696,15 +2980,19 @@ function openFile(path, itemElement) {
  * Toggle file tree visibility
  */
 function toggleFileTree(show) {
-  const isVisible = elements.fileTree.classList.contains('visible');
-  
-  if (show === false || isVisible) {
-    elements.fileTree.classList.remove('visible');
-    elements.toggleFileTreeBtn.title = 'Show file tree';
-  } else {
-    elements.fileTree.classList.add('visible');
-    elements.toggleFileTreeBtn.title = 'Hide file tree';
+  if (show === false) {
+    openProjectsDrawer('projects');
+    elements.projectsList.scrollIntoView({ block: 'start' });
+    return;
   }
+
+  if (!state.projectMode) {
+    openProjectsDrawer('projects');
+    showErrorToast('Open a project to browse its files');
+    return;
+  }
+  openProjectsDrawer('files');
+  elements.fileTree.scrollIntoView({ block: 'nearest' });
 }
 
 /**
@@ -3137,28 +3425,57 @@ function hideToast(type) {
 
 const API_BASE = '/api/v1';
 
-function openProjectsDrawer() {
-  elements.projectsDrawer.classList.add('open');
-  elements.drawerOverlay.classList.add('open');
+function setSidebarSection(section) {
+  const showFiles = section === 'files';
+  elements.projectsBtn.classList.toggle('active', !showFiles);
+  elements.toggleFileTreeBtn.classList.toggle('active', showFiles);
+}
+
+function setSidebarCollapsed(collapsed, options = {}) {
+  const { persist = true } = options;
+  state.sidebarCollapsed = Boolean(collapsed);
+  elements.workspaceSidebar.classList.toggle('collapsed', state.sidebarCollapsed);
+  elements.projectsDrawer.classList.toggle('open', !state.sidebarCollapsed);
+  elements.projectsBtn.setAttribute('aria-expanded', String(!state.sidebarCollapsed));
+  elements.closeDrawer.setAttribute('aria-expanded', String(!state.sidebarCollapsed));
+  elements.closeDrawer.title = state.sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  elements.closeDrawer.dataset.label = state.sidebarCollapsed ? 'Expand' : 'Collapse';
+  elements.closeDrawer.setAttribute(
+    'aria-label',
+    state.sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'
+  );
+
+  if (persist) {
+    try {
+      localStorage.setItem('latexEditor_sidebarCollapsed', String(state.sidebarCollapsed));
+    } catch (error) {
+      console.error('Failed to save sidebar setting:', error);
+    }
+  }
+}
+
+function openProjectsDrawer(section = 'projects') {
+  setSidebarCollapsed(false);
+  setSidebarSection(section);
   loadProjectsList();
   loadStorageInfo();
 }
 
 function closeProjectsDrawer() {
-  elements.projectsDrawer.classList.remove('open');
-  elements.drawerOverlay.classList.remove('open');
+  setSidebarCollapsed(true);
 }
 
 async function loadStorageInfo() {
   try {
     const res = await fetch(`${API_BASE}/settings`);
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const sizeKB = (data.db_size_bytes / 1024).toFixed(1);
     elements.drawerStorageInfo.innerHTML =
       `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>` +
       ` Storage: <strong>${data.storage_path}</strong> (${sizeKB} KB)`;
-  } catch {
+  } catch (error) {
+    console.error('Failed to load storage information:', error);
     elements.drawerStorageInfo.textContent = '';
   }
 }
@@ -3211,34 +3528,62 @@ function renderProjectsList(projects) {
           </svg>
           <span>${escapeHtml(p.github.repo)}${p.github.path ? `/${escapeHtml(p.github.path)}` : ''} · ${escapeHtml(p.github.branch)}</span>
         </div>`
-      : '';
-    return `<div class="project-card${isActive ? ' active' : ''}" data-id="${escapeHtml(p.id)}">
-      <div class="project-card-header">
-        <span class="project-card-name">${escapeHtml(p.name)}</span>
-        <div class="project-card-actions">
-          <button class="icon-btn" title="Rename" data-action="rename" data-id="${escapeHtml(p.id)}">
+      : `<div class="project-card-source unlinked">
+          <span>Not linked to GitHub</span>
+        </div>`;
+    return `<article class="project-card${isActive ? ' active' : ''}" data-id="${escapeHtml(p.id)}">
+      <button class="project-card-open" type="button" data-id="${escapeHtml(p.id)}"
+             aria-current="${isActive ? 'page' : 'false'}">
+        <div class="project-card-header">
+          <span class="project-card-name">${escapeHtml(p.name)}</span>
+        </div>
+        <div class="project-card-meta">${p.file_count || 0} files · Updated ${updated}</div>
+        ${githubSource}
+      </button>
+      <div class="project-card-actions">
+          <button class="icon-btn" type="button"
+                  title="GitHub settings for ${escapeHtml(p.name)}"
+                  aria-label="GitHub settings for ${escapeHtml(p.name)}"
+                  data-action="github" data-id="${escapeHtml(p.id)}">
+            <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+            </svg>
+          </button>
+          <button class="icon-btn" type="button" title="Rename"
+                  aria-label="Rename ${escapeHtml(p.name)}"
+                  data-action="rename" data-id="${escapeHtml(p.id)}">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
               <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
             </svg>
           </button>
-          <button class="icon-btn" title="Delete" data-action="delete" data-id="${escapeHtml(p.id)}" data-name="${escapeHtml(p.name)}">
+          <button class="icon-btn" type="button" title="Delete"
+                  aria-label="Delete ${escapeHtml(p.name)}"
+                  data-action="delete" data-id="${escapeHtml(p.id)}"
+                  data-name="${escapeHtml(p.name)}">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
             </svg>
           </button>
-        </div>
       </div>
-      <div class="project-card-meta">${p.file_count || 0} files · Updated ${updated}</div>
-      ${githubSource}
-    </div>`;
+    </article>`;
   }).join('');
 
   // Attach event listeners
-  elements.projectsList.querySelectorAll('.project-card').forEach(card => {
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('[data-action]')) return;
-      openProject(card.dataset.id);
+  elements.projectsList.querySelectorAll('.project-card-open').forEach(button => {
+    button.addEventListener('click', () => {
+      openProject(button.dataset.id);
+    });
+  });
+  elements.projectsList.querySelectorAll('[data-action="github"]').forEach(btn => {
+    btn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      if (state.currentProjectId !== btn.dataset.id) {
+        await openProject(btn.dataset.id);
+      }
+      if (state.currentProjectId === btn.dataset.id) {
+        await openGithubModal('project');
+      }
     });
   });
   elements.projectsList.querySelectorAll('[data-action="rename"]').forEach(btn => {
@@ -3288,7 +3633,7 @@ async function openProject(projectId) {
     if (requestId !== _openProjectRequestId) return;
 
     restoreProject(project, { showToast: false });
-    closeProjectsDrawer();
+    loadProjectsList();
     compile();
     showSuccessToast(`Opened project: ${project.name}`);
   } catch (err) {
@@ -3453,6 +3798,7 @@ async function renameProjectPrompt(projectId) {
     }
     if (state.currentProjectId === projectId) {
       state.currentProjectName = newName.trim();
+      elements.fileTreeProjectName.textContent = state.currentProjectName;
     }
     loadProjectsList();
     showSuccessToast(`Renamed to: ${newName.trim()}`);
@@ -3502,25 +3848,30 @@ const GITHUB_REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
 const GITHUB_BRANCH_FORBIDDEN = /[\x00-\x20\x7f~^:?*\[\\]/;
 const GITHUB_FILE_MODES = new Set(['100644', '100755', '120000']);
 
-async function openGithubModal() {
+async function openGithubModal(mode = 'project') {
+  state.githubModalMode = mode === 'import' ? 'import' : 'project';
   elements.githubModalOverlay.classList.add('open');
   elements.githubToken.value = '';
 
-  const link = getCurrentGithubLink();
-  elements.githubRepo.value = link?.repo
-    || localStorage.getItem('latexEditor_githubRepo')
-    || '';
-  elements.githubPath.value = link?.path
-    ?? localStorage.getItem('latexEditor_githubPath')
-    ?? '';
-  elements.githubBranch.value = link?.branch
-    || localStorage.getItem('latexEditor_githubBranch')
-    || '';
+  const link = state.githubModalMode === 'project' ? getCurrentGithubLink() : null;
+  if (state.githubModalMode === 'project') {
+    elements.githubRepo.value = link?.repo || '';
+    elements.githubPath.value = link?.path || '';
+    elements.githubBranch.value = link?.branch || '';
+  } else {
+    elements.githubRepo.value = readLocalStorage('latexEditor_githubRepo', '');
+    elements.githubPath.value = readLocalStorage('latexEditor_githubPath', '');
+    elements.githubBranch.value = readLocalStorage('latexEditor_githubBranch', '');
+  }
 
   await loadGithubConnection();
   refreshGithubModal();
   if (state.githubTokenConfigured) {
-    elements.githubRepo.focus();
+    if (state.githubModalMode === 'project' && link) {
+      elements.githubPull.focus();
+    } else {
+      elements.githubRepo.focus();
+    }
   } else {
     elements.githubToken.focus();
   }
@@ -3623,7 +3974,22 @@ async function loadGithubConnection() {
 
 function refreshGithubModal() {
   const connected = state.githubTokenConfigured;
-  const link = getCurrentGithubLink();
+  const projectMode = state.githubModalMode === 'project';
+  const link = projectMode ? getCurrentGithubLink() : null;
+  const hasProject = Boolean(state.projectMode && Object.keys(state.projectFiles).length);
+  const projectName = state.currentProjectName || 'Unsaved document';
+
+  elements.githubModalEyebrow.textContent = projectMode ? 'Project source' : 'New project';
+  elements.githubModalTitle.textContent = projectMode
+    ? `GitHub for “${projectName}”`
+    : 'Import GitHub folder';
+  elements.githubProjectName.textContent = projectMode
+    ? projectName
+    : 'New linked project';
+  elements.githubProjectState.textContent = projectMode
+    ? (link ? 'Linked' : 'Not linked')
+    : 'Created separately';
+  elements.githubProjectState.classList.toggle('linked', Boolean(projectMode && link));
 
   elements.githubStatus.className = state.githubTokenNeedsReconnect
     ? 'github-status error'
@@ -3632,23 +3998,32 @@ function refreshGithubModal() {
     ? 'Stored PAT cannot be decrypted. Connect GitHub again.'
     : (
       connected
-        ? `Encrypted PAT configured${state.githubLogin ? ` for ${state.githubLogin}` : ''}`
+        ? `Shared GitHub credential configured${state.githubLogin ? ` for ${state.githubLogin}` : ''}`
         : ''
     );
   elements.githubStatus.style.display = (
     connected || state.githubTokenNeedsReconnect
   ) ? 'block' : 'none';
   elements.githubToken.placeholder = connected
-    ? 'Encrypted PAT stored locally'
+    ? 'Encrypted shared PAT stored locally'
     : 'github_pat_xxxxxxxxxxxx';
   elements.githubSave.style.display = connected ? 'none' : '';
   elements.githubDisconnect.style.display = connected ? '' : 'none';
-  elements.githubRepoGroup.style.display = connected ? '' : 'none';
-  elements.githubImport.style.display = connected ? '' : 'none';
-  elements.githubPull.style.display = connected && link ? '' : 'none';
-  elements.githubCommit.style.display = connected && link ? '' : 'none';
+  elements.githubRepoGroup.style.display = (
+    connected && (!projectMode || !link)
+  ) ? '' : 'none';
+  elements.githubImport.style.display = connected && !projectMode ? '' : 'none';
+  elements.githubLink.style.display = (
+    connected && projectMode && !link && hasProject
+  ) ? '' : 'none';
+  elements.githubPull.style.display = connected && projectMode && link ? '' : 'none';
+  elements.githubCommit.style.display = connected && projectMode && link ? '' : 'none';
+  elements.githubUnlink.style.display = projectMode && link ? '' : 'none';
+  elements.githubRepoHint.textContent = projectMode
+    ? 'Link & pull replaces this project’s local files with the selected GitHub folder. Other projects are unchanged.'
+    : 'Imports this folder as a separate linked project. Existing projects and their links are unchanged.';
 
-  if (link) {
+  if (projectMode && link) {
     const folder = link.path ? `/${link.path}` : '';
     elements.githubLinkedSourcePath.textContent =
       `${link.repo}${folder} @ ${link.branch}`;
@@ -3666,9 +4041,12 @@ function setGithubControlsDisabled(disabled) {
   [
     elements.githubSave,
     elements.githubDisconnect,
+    elements.githubUnlink,
     elements.githubImport,
+    elements.githubLink,
     elements.githubPull,
     elements.githubCommit,
+    elements.pullGithubBtn,
     elements.commitGithubBtn,
     elements.githubRepo,
     elements.githubPath,
@@ -3720,7 +4098,7 @@ async function disconnectGithub() {
     clearLegacyGithubTokenStorage();
     elements.githubToken.value = '';
     refreshGithubModal();
-    showSuccessToast('Disconnected from GitHub');
+    showSuccessToast('Forgot the shared GitHub PAT; project links are unchanged');
   } catch (error) {
     elements.githubStatus.className = 'github-status error';
     elements.githubStatus.textContent = `Disconnect failed: ${error.message}`;
@@ -4109,6 +4487,7 @@ async function runGithubOperation(label, operation) {
   state.githubSyncInProgress = true;
   clearTimeout(_backendSaveTimer);
   refreshGithubModal();
+  refreshProjectGithubActions();
 
   try {
     if (_backendSaveInFlight) {
@@ -4122,13 +4501,129 @@ async function runGithubOperation(label, operation) {
   } finally {
     state.githubSyncInProgress = false;
     refreshGithubModal();
+    refreshProjectGithubActions();
   }
+}
+
+async function linkCurrentProjectFromGithub() {
+  if (!state.projectMode || Object.keys(state.projectFiles).length === 0) {
+    showErrorToast('Create or open a project before linking GitHub');
+    return;
+  }
+  if (getCurrentGithubLink()) {
+    showErrorToast('This project is already linked to GitHub');
+    return;
+  }
+  if (!(await loadGithubConnection())) {
+    showErrorToast('Save a GitHub PAT first');
+    return;
+  }
+
+  let config;
+  try {
+    config = getGithubImportConfig();
+  } catch (error) {
+    showErrorToast(error.message);
+    return;
+  }
+
+  const confirmed = await showConfirmModal(
+    'Link and Pull',
+    `Replace all local files in “${state.currentProjectName || 'this project'}” `
+      + `with ${config.repo}/${config.path || ''} and link only this project?`,
+    { okLabel: 'Link & pull' }
+  );
+  if (!confirmed) return;
+
+  try {
+    const saved = await saveProjectToBackend({ throwOnError: true });
+    if (!saved) return;
+  } catch (error) {
+    console.error('Failed to save project before GitHub linking:', error);
+    showErrorToast(`Save failed: ${error.message}`);
+    return;
+  }
+  const projectId = state.currentProjectId;
+  if (!projectId) {
+    showErrorToast('Save the project locally before linking GitHub');
+    return;
+  }
+
+  await runGithubOperation('Link', async () => {
+    showStatus('Linking project to GitHub...', 'info');
+    const snapshot = await fetchGithubFolderSnapshot(config);
+    assertActiveProject(projectId);
+    const project = await backendProjectRequest(
+      `${API_BASE}/projects/${projectId}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: serializeProjectFiles(snapshot.files),
+          main_file: snapshot.mainFile,
+          github: githubLinkFromSnapshot(snapshot),
+        }),
+      }
+    );
+
+    assertActiveProject(projectId);
+    restoreProject(project, { showToast: false });
+    saveProjectToLocalStorage();
+    loadProjectsList();
+    closeGithubModal(true);
+    compile();
+    showSuccessToast(`Linked ${state.currentProjectName} to ${snapshot.repo}`);
+    showStatus('Project linked to GitHub', 'success');
+  });
+}
+
+async function unlinkCurrentProjectFromGithub() {
+  const link = getCurrentGithubLink();
+  const projectId = state.currentProjectId;
+  if (!link || !projectId) {
+    showErrorToast('The current project is not linked to GitHub');
+    return;
+  }
+
+  const confirmed = await showConfirmModal(
+    'Unlink Project',
+    `Stop syncing “${state.currentProjectName || 'this project'}” with `
+      + `${link.repo}/${link.path || ''}? Local files and the shared PAT stay unchanged.`,
+    { okLabel: 'Unlink project' }
+  );
+  if (!confirmed) return;
+
+  await runGithubOperation('Unlink', async () => {
+    if (
+      state.currentFile
+      && !isBinaryContent(state.projectFiles[state.currentFile])
+    ) {
+      state.projectFiles[state.currentFile] = state.currentLatex;
+    }
+    await backendProjectRequest(`${API_BASE}/projects/${projectId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: serializeProjectFiles(),
+        main_file: state.mainFile,
+        engine: state.engine,
+        github: null,
+      }),
+    });
+    assertActiveProject(projectId);
+    clearProjectGithubLink();
+    saveProjectToLocalStorage();
+    loadProjectsList();
+    refreshGithubModal();
+    showSuccessToast(`Unlinked ${state.currentProjectName} from GitHub`);
+    showStatus('Project is no longer linked to GitHub', 'success');
+  });
 }
 
 async function importFromGithub() {
   if (!(await loadGithubConnection())) {
     showErrorToast('Connect to GitHub first');
-    openGithubModal();
+    openGithubModal('import');
     return;
   }
 
@@ -4183,7 +4678,7 @@ async function importFromGithub() {
     restoreProject(project, { showToast: false });
     saveProjectToLocalStorage();
     closeGithubModal(true);
-    closeProjectsDrawer();
+    loadProjectsList();
     compile();
     showSuccessToast(`Imported ${snapshot.repo}/${snapshot.path || ''}`);
     showStatus('GitHub folder imported', 'success');
