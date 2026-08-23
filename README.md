@@ -5,7 +5,9 @@
 [![Code of Conduct](https://img.shields.io/badge/Code%20of%20Conduct-Contributor%20Covenant-blue.svg)](CODE_OF_CONDUCT.md)
 
 A free, open source LaTeX editor with compiler-accurate PDF preview. Think Overleaf, but
-self-hostable and without compile quotas.
+self-hostable and without compilation size limit, nor any other limit.
+
+<img width="1710" height="950" alt="image" src="https://github.com/user-attachments/assets/c951281a-1ad6-4c8c-bf0e-1af0c420b2a2" />
 
 ## ✨ Features
 
