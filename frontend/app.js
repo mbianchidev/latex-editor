@@ -97,6 +97,7 @@ const state = {
   autoCompilePending: false,
   showLineNumbers: true,
   lineNumberCount: 0,
+  pendingEditorLineDelta: null,
   highlightedWarningLine: null,
   syntaxWarnings: [],
   // Multi-file project support
@@ -369,8 +370,16 @@ function syncEditorScroll() {
   elements.editorLineNumbers.scrollTop = elements.editor.scrollTop;
 }
 
-function updateEditorLineNumbers(force = false) {
-  const lineCount = Math.max(1, elements.editor.value.split('\n').length);
+function countNewlines(value) {
+  let count = 0;
+  for (let index = value.indexOf('\n'); index !== -1; index = value.indexOf('\n', index + 1)) {
+    count++;
+  }
+  return count;
+}
+
+function updateEditorLineNumbers(force = false, knownLineCount = null) {
+  const lineCount = knownLineCount ?? (countNewlines(elements.editor.value) + 1);
   if (!force && lineCount === state.lineNumberCount) {
     syncEditorScroll();
     return;
@@ -419,6 +428,15 @@ function setEditorContent(content, readOnly = false) {
   scheduleSyntaxWarnings(0);
 }
 
+function readLocalStorage(key, fallback = null) {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch (error) {
+    console.error(`Failed to read local setting ${key}:`, error);
+    return fallback;
+  }
+}
+
 // ============================================
 // INITIALIZATION
 // ============================================
@@ -442,11 +460,11 @@ async function init() {
   
   initializeEditor();
   setShowLineNumbers(
-    localStorage.getItem('latexEditor_showLineNumbers') !== 'false',
+    readLocalStorage('latexEditor_showLineNumbers') !== 'false',
     { persist: false }
   );
   setSidebarCollapsed(
-    localStorage.getItem('latexEditor_sidebarCollapsed') === 'true',
+    readLocalStorage('latexEditor_sidebarCollapsed') === 'true',
     { persist: false }
   );
   
@@ -458,18 +476,18 @@ async function init() {
   initAutocomplete();
   
   // Restore zoom from localStorage
-  const savedZoom = localStorage.getItem('latexEditor_zoom');
+  const savedZoom = readLocalStorage('latexEditor_zoom');
   if (savedZoom) setZoom(parseFloat(savedZoom));
-  const savedEngine = localStorage.getItem('latexEditor_engine');
+  const savedEngine = readLocalStorage('latexEditor_engine');
   if (savedEngine) setLatexEngine(savedEngine);
   setAutoCompile(
-    localStorage.getItem('latexEditor_autoCompile') === 'true',
+    readLocalStorage('latexEditor_autoCompile') === 'true',
     { persist: false, schedule: false }
   );
 
   // Always load projects from the backend (authoritative source)
   let restored = false;
-  const lastProjectId = localStorage.getItem('latexEditor_lastProjectId');
+  const lastProjectId = readLocalStorage('latexEditor_lastProjectId');
   if (lastProjectId) {
     restored = await loadLastProjectFromBackend();
   }
@@ -501,6 +519,7 @@ async function init() {
 // ============================================
 
 function initializeEditor() {
+  elements.editor.addEventListener('beforeinput', handleEditorBeforeInput);
   // Listen for editor changes
   elements.editor.addEventListener('input', handleEditorChange);
   
@@ -1006,15 +1025,52 @@ function initializeEventListeners() {
 // EDITOR HANDLERS
 // ============================================
 
+function handleEditorBeforeInput(event) {
+  const { inputType } = event;
+  const value = elements.editor.value;
+  const start = elements.editor.selectionStart;
+  const end = elements.editor.selectionEnd;
+  let removed = value.slice(start, end);
+  let inserted = null;
+
+  if (inputType === 'insertLineBreak' || inputType === 'insertParagraph') {
+    inserted = '\n';
+  } else if (inputType.startsWith('insert') && typeof event.data === 'string') {
+    inserted = event.data;
+  } else if (inputType.startsWith('delete')) {
+    inserted = '';
+    if (start === end && inputType === 'deleteContentBackward') {
+      removed = value.slice(Math.max(0, start - 1), start);
+    } else if (start === end && inputType === 'deleteContentForward') {
+      removed = value.slice(start, start + 1);
+    } else if (start === end) {
+      state.pendingEditorLineDelta = null;
+      return;
+    }
+  }
+
+  state.pendingEditorLineDelta = inserted === null
+    ? null
+    : countNewlines(inserted) - countNewlines(removed);
+}
+
 function handleEditorChange(e) {
   if (state.githubSyncInProgress || state.projectSwitchInProgress) {
     e.target.value = state.currentLatex;
+    state.pendingEditorLineDelta = null;
     showErrorToast('Wait for the current project operation to finish');
     return;
   }
+  const lineDelta = state.pendingEditorLineDelta;
+  state.pendingEditorLineDelta = null;
   state.currentLatex = e.target.value;
   clearWarningLineHighlight();
-  updateEditorLineNumbers();
+  updateEditorLineNumbers(
+    false,
+    Number.isInteger(lineDelta)
+      ? Math.max(1, state.lineNumberCount + lineDelta)
+      : null
+  );
   markCompileDirty();
   
   // Update project file if in project mode
@@ -2925,15 +2981,17 @@ function openFile(path, itemElement) {
  */
 function toggleFileTree(show) {
   if (show === false) {
-    closeProjectsDrawer();
+    openProjectsDrawer('projects');
+    elements.projectsList.scrollIntoView({ block: 'start' });
     return;
   }
 
-  openProjectsDrawer('files');
   if (!state.projectMode) {
+    openProjectsDrawer('projects');
     showErrorToast('Open a project to browse its files');
     return;
   }
+  openProjectsDrawer('files');
   elements.fileTree.scrollIntoView({ block: 'nearest' });
 }
 
@@ -3801,9 +3859,9 @@ async function openGithubModal(mode = 'project') {
     elements.githubPath.value = link?.path || '';
     elements.githubBranch.value = link?.branch || '';
   } else {
-    elements.githubRepo.value = localStorage.getItem('latexEditor_githubRepo') || '';
-    elements.githubPath.value = localStorage.getItem('latexEditor_githubPath') || '';
-    elements.githubBranch.value = localStorage.getItem('latexEditor_githubBranch') || '';
+    elements.githubRepo.value = readLocalStorage('latexEditor_githubRepo', '');
+    elements.githubPath.value = readLocalStorage('latexEditor_githubPath', '');
+    elements.githubBranch.value = readLocalStorage('latexEditor_githubBranch', '');
   }
 
   await loadGithubConnection();
