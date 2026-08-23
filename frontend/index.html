@@ -24,6 +24,7 @@
             crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 <body>
+    <a class="skip-link" href="#editor">Skip to source editor</a>
     <!-- Header -->
     <header class="header">
         <div class="header-content">
@@ -31,13 +32,7 @@
                 <h1 class="logo">LaTeX<span class="logo-accent">Editor</span></h1>
                 <span class="tagline">Professional Document Editing</span>
             </div>
-            <div class="header-actions">
-                <button class="btn btn-secondary" id="projectsBtn" title="My Projects">
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                    </svg>
-                    Projects
-                </button>
+            <div class="header-actions" role="toolbar" aria-label="Document actions">
                 <button class="btn btn-secondary" id="newDoc" title="New Project">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -45,58 +40,131 @@
                         <line x1="12" y1="18" x2="12" y2="12"/>
                         <line x1="9" y1="15" x2="15" y2="15"/>
                     </svg>
-                    New
+                    <span class="btn-label">New</span>
                 </button>
                 <input type="file" id="zipFileInput" accept=".zip" style="display: none;" />
-                <button class="btn btn-secondary" id="downloadTex" title="Download LaTeX Source">
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                        <polyline points="7 10 12 15 17 10"/>
-                        <line x1="12" y1="15" x2="12" y2="3"/>
-                    </svg>
-                    .tex
-                </button>
-                <button class="btn btn-secondary" id="downloadZip" title="Download Project as ZIP" style="display: none;">
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                        <polyline points="7 10 12 15 17 10"/>
-                        <line x1="12" y1="15" x2="12" y2="3"/>
-                    </svg>
-                    ZIP
-                </button>
-                <button class="btn btn-secondary" id="commitGithubBtn"
-                        title="Commit project changes to GitHub" style="display: none;">
-                    <svg class="icon" viewBox="0 0 24 24" fill="none"
-                         stroke="currentColor" stroke-width="2">
-                        <circle cx="6" cy="5" r="2"/>
-                        <circle cx="18" cy="6" r="2"/>
-                        <circle cx="6" cy="19" r="2"/>
-                        <path d="M6 7v10"/>
-                        <path d="M8 7.5c4.5 0 3.5 5 8 5"/>
-                        <path d="M16 10.5l2 2-2 2"/>
-                    </svg>
-                    Commit
-                </button>
-                <button class="btn btn-primary" id="downloadPdf" title="Download PDF">
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                        <polyline points="7 10 12 15 17 10"/>
-                        <line x1="12" y1="15" x2="12" y2="3"/>
-                    </svg>
-                    PDF
-                </button>
+                <div class="github-quick-actions" id="githubQuickActions" hidden>
+                    <button class="btn btn-secondary btn-compact" id="pullGithubBtn"
+                            title="Replace local files with the latest GitHub version">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2">
+                            <path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/>
+                            <path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/>
+                        </svg>
+                        <span class="btn-label">Pull</span>
+                    </button>
+                    <button class="btn btn-secondary btn-compact" id="commitGithubBtn"
+                            title="Commit project changes to GitHub">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2">
+                            <circle cx="6" cy="5" r="2"/>
+                            <circle cx="18" cy="6" r="2"/>
+                            <circle cx="6" cy="19" r="2"/>
+                            <path d="M6 7v10"/>
+                            <path d="M8 7.5c4.5 0 3.5 5 8 5"/>
+                            <path d="M16 10.5l2 2-2 2"/>
+                        </svg>
+                        <span class="btn-label">Commit</span>
+                    </button>
+                </div>
+                <div class="dropdown download-dropdown" id="downloadMenu">
+                    <button class="btn btn-primary dropdown-toggle" id="downloadMenuBtn"
+                            type="button" aria-haspopup="menu" aria-expanded="false"
+                            aria-controls="downloadMenuList">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                        <span class="btn-label">Download</span>
+                        <svg class="dropdown-arrow" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                    </button>
+                    <div class="dropdown-menu" id="downloadMenuList" role="menu"
+                         aria-label="Download format">
+                        <button class="dropdown-item" id="downloadPdf" type="button"
+                                role="menuitem">PDF document</button>
+                        <button class="dropdown-item" id="downloadTex" type="button"
+                                role="menuitem">Current .tex file</button>
+                        <button class="dropdown-item" id="downloadZip" type="button"
+                                role="menuitem" disabled
+                                title="Open a project to download its ZIP">Project ZIP</button>
+                    </div>
+                </div>
             </div>
         </div>
     </header>
 
     <!-- Main Content -->
-    <main class="main-content">
-        <!-- Editor Panel -->
-        <div class="editor-panel" id="editorPanel">
-            <!-- File Tree (hidden by default, shown when project loaded) -->
-            <div class="file-tree" id="fileTree">
+    <main class="main-content" id="mainContent">
+        <aside class="workspace-sidebar" id="workspaceSidebar" aria-label="Workspace">
+            <nav class="workspace-rail" aria-label="Workspace shortcuts">
+                <button class="rail-button active" id="projectsBtn" type="button"
+                        title="Projects" aria-label="Open projects" aria-expanded="true"
+                        aria-controls="projectsDrawer">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    </svg>
+                </button>
+                <button class="rail-button" id="toggleFileTree" type="button"
+                        title="Files" aria-label="Open project files">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
+                </button>
+                <span class="rail-spacer"></span>
+                <button class="rail-button" id="drawerGithubBtn" type="button"
+                        title="GitHub settings" aria-label="Open GitHub settings">
+                    <svg class="icon" viewBox="0 0 24 24" fill="currentColor"
+                         aria-hidden="true">
+                        <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+                    </svg>
+                </button>
+                <button class="rail-button rail-collapse" id="closeDrawer" type="button"
+                        title="Collapse sidebar" aria-label="Collapse sidebar"
+                        aria-expanded="true" aria-controls="projectsDrawer">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2">
+                        <polyline points="15 18 9 12 15 6"/>
+                    </svg>
+                </button>
+            </nav>
+
+            <section class="projects-drawer open" id="projectsDrawer"
+                     aria-label="Projects and files">
+                <div class="drawer-header">
+                    <div>
+                        <span class="sidebar-section-label">Workspace</span>
+                        <h2 class="drawer-title">Projects</h2>
+                    </div>
+                    <button class="icon-btn" id="drawerNewProjectBtn" type="button"
+                            title="New project" aria-label="New project">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2">
+                            <path d="M12 5v14M5 12h14"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="drawer-body" id="projectsList">
+                    <div class="drawer-empty">
+                        <p>Loading projects...</p>
+                    </div>
+                </div>
+                <div class="file-tree" id="fileTree">
                 <div class="file-tree-header">
-                    <h3 class="file-tree-title">Files</h3>
+                    <div class="file-tree-heading">
+                        <span class="sidebar-section-label">Files</span>
+                        <h3 class="file-tree-title" id="fileTreeProjectName">Current project</h3>
+                        <span class="file-tree-count" id="fileTreeCount"></span>
+                    </div>
                     <div class="file-tree-header-actions">
                         <button class="icon-btn small" id="newFileBtn" title="New File">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -128,11 +196,20 @@
                         </button>
                     </div>
                 </div>
-                <div class="file-tree-content" id="fileTreeContent">
+                <div class="file-tree-content" id="fileTreeContent" role="tree"
+                     aria-label="Project files">
                     <!-- File tree will be populated here -->
                 </div>
             </div>
-            
+                <div class="drawer-footer">
+                    <div class="drawer-storage-info" id="drawerStorageInfo"></div>
+                </div>
+            </section>
+        </aside>
+
+        <div class="workspace-main">
+        <!-- Editor Panel -->
+        <div class="editor-panel" id="editorPanel">
             <!-- Editor content wrapper -->
             <div class="editor-panel-content">
                 <div class="panel-header">
@@ -150,11 +227,11 @@
                             <input type="checkbox" id="autoCompile">
                             <span>Auto</span>
                         </label>
-                        <button class="icon-btn" id="toggleFileTree" title="Show file tree" style="display: none;">
-                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                            </svg>
-                        </button>
+                        <label class="toggle-label line-number-control"
+                               title="Show or hide source line numbers">
+                            <input type="checkbox" id="showLineNumbers">
+                            <span class="toggle-text">Lines</span>
+                        </label>
                         <button class="icon-btn" id="compileBtn" title="Compile (Ctrl+Enter)">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <polygon points="5 3 19 12 5 21 5 3"/>
@@ -163,7 +240,12 @@
                     </div>
                 </div>
                 <div class="editor-container" style="position: relative;">
-                    <textarea id="editor" spellcheck="false"></textarea>
+                    <div class="editor-code" id="editorCode">
+                        <div class="editor-line-numbers" id="editorLineNumbers"
+                             aria-hidden="true"></div>
+                        <textarea id="editor" spellcheck="false" wrap="off"
+                                  aria-label="LaTeX source"></textarea>
+                    </div>
                     <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
                     <div class="syntax-warning-panel" id="syntaxWarningPanel"
                          role="region" aria-label="LaTeX warnings" hidden></div>
@@ -227,6 +309,7 @@
                 </div>
             </div>
         </div>
+        </div>
     </main>
 
     <!-- Error Toast -->
@@ -255,47 +338,6 @@
         </div>
         <button class="toast-close" id="closeSuccess">×</button>
     </div>
-
-    <!-- Projects Drawer -->
-    <div class="drawer-overlay" id="drawerOverlay"></div>
-    <aside class="projects-drawer" id="projectsDrawer">
-        <div class="drawer-header">
-            <h2 class="drawer-title">My Projects</h2>
-            <button class="icon-btn" id="closeDrawer" title="Close">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="18" y1="6" x2="6" y2="18"/>
-                    <line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-            </button>
-        </div>
-        <div class="drawer-body" id="projectsList">
-            <div class="drawer-empty">
-                <svg class="drawer-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                </svg>
-                <p>No projects yet</p>
-                <p class="drawer-empty-hint">Import a ZIP or create a new project to get started.</p>
-            </div>
-        </div>
-        <div class="drawer-footer">
-            <button class="btn btn-secondary btn-full" id="drawerNewProjectBtn" title="New Project" style="margin-bottom: 0.5em;">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                    <polyline points="14 2 14 8 20 8"/>
-                    <line x1="12" y1="18" x2="12" y2="12"/>
-                    <line x1="9" y1="15" x2="15" y2="15"/>
-                </svg>
-                New Project
-            </button>
-            <button class="btn btn-secondary btn-full" id="drawerGithubBtn" title="Connect GitHub">
-                <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
-                </svg>
-                GitHub Settings
-            </button>
-            <div class="drawer-storage-info" id="drawerStorageInfo"></div>
-        </div>
-    </aside>
 
     <!-- GitHub Folder Sync Modal -->
     <div class="modal-overlay" id="githubModalOverlay">
