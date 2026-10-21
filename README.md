@@ -4,70 +4,88 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Code of Conduct](https://img.shields.io/badge/Code%20of%20Conduct-Contributor%20Covenant-blue.svg)](CODE_OF_CONDUCT.md)
 
-A free, open source LaTeX editor with compiler-accurate PDF preview. Think Overleaf, but
-self-hostable and without compilation size limit, nor any other limit.
+A free, self-hostable LaTeX editor with compiler-accurate PDF preview. Write documents in
+your browser, compile them with a real TeX engine, and keep projects on your own server.
+There are no subscription-based compile quotas, but request, project, and compilation
+safety limits apply.
 
-<img width="1710" height="950" alt="image" src="https://github.com/user-attachments/assets/55dadadf-e9a0-4b4c-b3bc-6e3de048f3ea" />
+<img width="1710" height="950" alt="LaTeX Editor with project files, source editor, and compiled PDF preview" src="https://github.com/user-attachments/assets/55dadadf-e9a0-4b4c-b3bc-6e3de048f3ea" />
 
-## ✨ Features
+## Features
 
-- **Exact PDF Preview**: Preview the PDF produced by the selected TeX engine
-- **Preview/Export Parity**: PDF export downloads the same compiled bytes shown in preview
-- **No Compile Quotas**: Compile whenever you want within configurable safety limits
-- **Multi-file Projects**: Upload ZIP files with multiple .tex files, images, and fonts
-- **CV/Resume Support**: Full rendering of CV-class documents (russell.cls) with sections, entries, skills tables
-- **Project Management**: Save, open, rename, and delete projects from a sidebar drawer
-- **SQLite Persistence**: Projects stored in a SQLite database on the backend (survives container restarts)
-- **GitHub Folder Sync**: Import a repository folder, pull updates, and commit edits back
-- **Syntax Highlighting**: Full LaTeX syntax highlighting for easier editing
-- **Syntax Warnings**: Flag likely literal `%`/`&` mistakes and unmatched braces without blocking TeX
-- **Optional Auto-Compile**: Compile one second after editing stops
-- **File Management**: Add, rename, and delete files directly in the browser
-- **Free & Open Source**: No paywalls, no subscriptions, no restrictions
-- **Self-Hostable**: Run it locally with Docker or deploy to your own server
-- **Multiple TeX Engines**: Choose pdfLaTeX, XeLaTeX, or LuaLaTeX per project
+- **Real PDF preview and export**: PDF.js displays the compiler output, and PDF downloads
+  use the same compiled bytes. Export the current `.tex` file or the complete project ZIP too.
+- **Three TeX engines**: Choose pdfLaTeX, XeLaTeX, or LuaLaTeX per project. TeX Live and
+  `latexmk` handle includes, bibliography tools, document classes, images, and fonts.
+- **Multi-file workflows**: Start a blank or multi-file project, import a ZIP, and manage
+  files and folders in the sidebar. Custom classes such as `russell.cls` can be included.
+- **Persistent projects**: Save, open, rename, and delete projects backed by SQLite.
+  Named projects auto-save five seconds after editing stops.
+- **Editing assistance**: LaTeX command completion, optional line numbers, clickable
+  source warnings, and optional compilation one second after editing stops.
+- **Manual GitHub folder sync**: Import a repository folder, pull its latest files, and
+  commit local edits to the linked branch.
 
-## 🚀 Quick Start
+## Quick start
 
-### One-liner (Docker)
+### Prerequisites
+
+- Git and a modern web browser.
+- Docker Engine with Docker Compose v2 or newer (`docker compose`) and a running
+  Linux-container daemon. On macOS or Windows, use a runtime that provides Linux containers.
+- Internet access for image/package downloads and browser-loaded libraries and fonts.
+- Time and disk space for the large TeX Live toolchain installed by the first build.
+
+You do not need Python, Node.js, or TeX installed on the host to run the Docker stack.
+The shell examples below use a POSIX shell, such as Bash, Zsh, or a WSL shell on Windows.
+
+**Deployment warning:** There is no built-in login or per-user project isolation.
+The supplied Compose configuration publishes the frontend on the host's network interfaces.
+Keep access restricted to trusted users; add authentication and HTTPS at a reverse proxy
+before exposing the editor beyond a trusted local/private environment.
+
+### Install and run
 
 ```bash
-docker compose build --no-cache && docker compose up -d
-# Open http://localhost
-```
-
-### Using Docker (Recommended)
-
-```bash
-# Clone the repository
 git clone https://github.com/mbianchidev/latex-editor.git
 cd latex-editor
+cp .env.example .env
 
-# Start with Docker Compose
+# Edit .env first if port 80 is occupied or you want another data directory.
 docker compose build --no-cache
 docker compose up -d
-
-# Open http://localhost in your browser
+docker compose ps
 ```
 
-The backend image includes TeX Live, so the first no-cache build downloads a larger toolchain
-than a typical Flask image.
+Once both services report healthy, open **http://localhost**. The editor loads a starter
+document and compiles its PDF. Click **New**, enter a unique project name, and choose
+**Blank Document**, **Multi-file Project**, **Import ZIP**, or **Import GitHub Folder**
+to create a persistent project.
 
-The services use the stable container names `latex-editor-frontend` and
-`latex-editor-backend`. Stop and delete the stack, including obsolete Compose services, with:
+If another service uses port 80, set `LATEX_EDITOR_PORT=8080` in `.env` before running
+`docker compose up -d`, then open **http://localhost:8080**.
+
+To check the API through nginx, use curl (if installed):
+
+```bash
+curl --fail http://localhost/health
+# Expect JSON containing "status": "healthy".
+```
+
+Use the configured port in that URL if you changed it. If startup fails, inspect
+`docker compose ps` and `docker compose logs --tail=100`.
+
+Stop and remove the containers, including obsolete Compose services, with:
 
 ```bash
 docker compose down --remove-orphans
 ```
 
-If another service already uses port 80, choose another host port:
+Project data remains in the host data directory. The stable container names
+`latex-editor-frontend` and `latex-editor-backend` mean two unmodified copies of this stack
+cannot run on the same Docker daemon at once.
 
-```bash
-LATEX_EDITOR_PORT=8080 docker compose up -d
-# Open http://localhost:8080
-```
-
-## 📖 User Guide
+## User guide
 
 ### Interface Overview
 
@@ -86,25 +104,27 @@ opens the active project's files. Hover or focus any rail icon to see its label.
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+Enter` | Compile document |
+| `Ctrl+Enter` or `Cmd+Enter` | Compile document |
 | `Tab` | Insert 2 spaces |
 
 ### Working with Projects
 
-1. **Upload a ZIP file** containing your LaTeX project — you'll be prompted for a project name
+1. Choose **New**, enter a project name, and select **Import ZIP** to upload a LaTeX project
 2. Files starting with `._` or in `__MACOSX` folders are automatically filtered
 3. Use the file tree to navigate between files
 4. Right-click files for rename/delete options
-5. The main .tex file is auto-detected (or set manually)
-6. Projects are auto-saved to the SQLite backend every 5 seconds
+5. The main `.tex` file is auto-detected; right-click another `.tex` file and choose
+   **Set as Main** if needed
+6. Named projects are auto-saved to the SQLite backend five seconds after the latest edit
 
 ### Project Management
 
 - Projects stay available in the left sidebar for quick switching
 - Click the sidebar chevron to collapse the panel to a thin icon rail without hiding navigation
 - The active project's files appear below the project list
-- All projects are persisted in a SQLite database on your host machine at `~/.latex-editor/data/` (customisable — see [Data Storage](#-data-storage))
-- Project names must be unique — duplicates are rejected
+- Named projects are persisted on the Docker host at `~/.latex-editor/data/` by default
+  (see [Data and configuration](#data-and-configuration))
+- Project names must be unique; duplicates are rejected
 - Open, rename, or delete projects directly from the sidebar
 - The storage path and database size are shown at the bottom of the sidebar
 
@@ -118,7 +138,8 @@ opens the active project's files. Hover or focus any rail icon to see its label.
 3. To link an existing local project, select its GitHub button, enter the repository
    (`owner/repo`), folder (`resume`), and optional branch, then choose **Link & pull**.
    This replaces that project's local files with the selected GitHub folder.
-   Leaving the branch blank uses the repository default branch.
+   Leaving the branch blank uses the repository default branch; leaving the folder blank
+   selects the repository root.
 4. Use the compact **Pull** button in the header, or **Pull latest** in project GitHub settings, to
    replace the local project with the current linked folder.
 5. Use **Commit** in the header or **Commit changes** in project GitHub settings
@@ -129,7 +150,9 @@ opens the active project's files. Hover or focus any rail icon to see its label.
    the shared credential without changing any project links.
 
 Only files inside the linked folder are managed. Files elsewhere in the repository
-remain unchanged. Protected branches require a writable branch.
+remain unchanged. Commits go directly to the linked branch, not through a pull request.
+Use a writable branch and export a ZIP before linking or pulling if you need to preserve
+local-only edits.
 
 Pulling is manual. Browser auto-save writes to local SQLite and does not automatically fetch
 or push GitHub changes.
@@ -137,15 +160,15 @@ or push GitHub changes.
 ### Compilation and PDF Export
 
 1. Select the same engine you use for standalone builds.
-2. Click ▶ or press `Ctrl+Enter`.
+2. Click ▶ or press `Ctrl+Enter` (`Cmd+Enter` on macOS).
 3. The complete project is compiled with `latexmk`; includes, classes, images, and fonts are
    resolved by TeX rather than approximated as HTML.
 4. The status bar reports the exact page count.
 5. Use **Download** to choose the compiled PDF, current `.tex` file, or full project ZIP.
    PDF export recompiles first when the source changed after the last compile.
 
-XeLaTeX is the default and is required by projects that use `fontspec`, such as
-`russell.cls` CVs. The selected engine is stored per project.
+XeLaTeX is the default. Projects that use `fontspec`, such as `russell.cls` CVs, need
+XeLaTeX or LuaLaTeX rather than pdfLaTeX. The selected engine is stored per project.
 
 Enable **Auto** beside the engine selector to compile one second after the latest edit. The
 preference is stored in the browser and remains off by default.
@@ -156,7 +179,7 @@ characters as `\%` and `\&`. Click a warning to select and highlight its source 
 **Lines** toggle in the editor toolbar to show or hide line numbers; the preference persists in
 the browser.
 
-## 📝 LaTeX Examples
+## LaTeX examples
 
 ### Basic Document
 
@@ -202,29 +225,40 @@ Your content here.
 \end{itemize}
 ```
 
-## 🛠️ Technology Stack
+## Technology stack
 
 - **Frontend**: HTML5, CSS3, Vanilla JavaScript (ES6+)
-- **Libraries**: PDF.js, CodeMirror, JSZip
+- **PDFs and archives**: PDF.js and JSZip, loaded from CDNs
 - **Backend**: Python/Flask, pypdf, cryptography, SQLite, and rate limiting (flask-limiter)
 - **Compiler**: TeX Live with latexmk, pdfLaTeX, XeLaTeX, and LuaLaTeX
 - **Database**: SQLite (bind-mounted to host filesystem)
 - **Container**: Docker with nginx (reverse proxy + CSP headers)
 
-## 💾 Data Storage
+## Data and configuration
 
-Projects are stored in a SQLite database that lives on your **host machine**, not inside the Docker container. This means your data survives `docker compose down`, image rebuilds, and container restarts.
+With Docker Compose, projects are stored in a SQLite database on the **Docker host**.
+The default directory is `~/.latex-editor/data/`, mounted at `/data` inside the backend,
+with the database at `/data/projects.db`. Data survives `docker compose down`, image
+rebuilds, and container restarts. The sidebar footer displays the backend's storage path
+and database size.
 
-**Default path:** `~/.latex-editor/data/projects.db`
+Copy [`.env.example`](.env.example) to `.env` in the repository root and adjust the values
+before starting the services. Re-run `docker compose up -d` after changing configuration.
 
-To use a custom path, create a `.env` file in the project root (see `.env.example`):
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `LATEX_EDITOR_PORT` | `80` | Frontend host port |
+| `LATEX_EDITOR_DATA` | `${HOME}/.latex-editor/data` | Host directory for the database and generated key |
+| `COMPILE_TIMEOUT_SECONDS` | `60` | Wall-clock timeout for each compile |
+| `MAX_REQUEST_BYTES` | `36700160` (35 MiB) | Maximum API request body, including Base64/JSON overhead |
+| `MAX_COMPILE_BYTES` | `26214400` (25 MiB) | Maximum combined decoded source and asset size per compile |
+| `GITHUB_TOKEN_ENCRYPTION_KEY` | Empty | Optional Fernet key, kept separate from database backups |
+| `GITHUB_TOKEN_KEY_PATH` | Empty | Generated-key path inside the backend; defaults beside the database |
 
-```bash
-# .env
-LATEX_EDITOR_DATA=/path/to/your/data
-```
-
-The storage path is visible in the projects drawer footer.
+nginx also caps request bodies at 35 MiB. Raising `MAX_REQUEST_BYTES` requires updating
+`client_max_body_size` in [`frontend/nginx.conf`](frontend/nginx.conf) and rebuilding the
+frontend image. Longer compilation timeouts also need compatible Gunicorn and nginx
+timeouts in the [backend Dockerfile](backend/Dockerfile) and nginx configuration.
 
 The GitHub PAT is encrypted before it is stored in SQLite, and GitHub API calls are proxied by
 the backend so the saved PAT is never returned to the browser. For stronger separation from
@@ -232,17 +266,67 @@ database backups, set `GITHUB_TOKEN_ENCRYPTION_KEY` in `.env`. Without it, the a
 `0600` key file beside the database; copying the whole data directory copies both the encrypted
 PAT and its key.
 
-Compilation defaults can also be changed in `.env`:
+To generate an environment-provided key after building the backend image:
 
 ```bash
-COMPILE_TIMEOUT_SECONDS=60
-MAX_REQUEST_BYTES=36700160
-MAX_COMPILE_BYTES=26214400
+docker compose run --rm --no-deps backend python -c \
+  "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-## 📁 Project Structure
+Set the result as `GITHUB_TOKEN_ENCRYPTION_KEY` in `.env` before saving a PAT, keep it
+private, and retain it separately from database backups. Changing or losing the key requires
+reconnecting the PAT. A custom `GITHUB_TOKEN_KEY_PATH` must be writable and persisted if it
+is outside `/data`.
 
+For a consistent filesystem backup, stop the stack before copying the data directory, or
+use SQLite-aware backup tooling. Changing `LATEX_EDITOR_DATA` selects a different directory;
+it does not migrate existing projects automatically.
+
+## Limits and current scope
+
+- **Shared instance, not a multi-user service**: All users who can reach the app share
+  projects and the stored GitHub credential. Account authentication, per-user access controls,
+  real-time collaborative editing, and document version history are not implemented.
+- **Safety limits, not unlimited compilation**: Backend defaults allow 50 projects,
+  1,000 files per compile, a 50 MiB compiled PDF, and 30 compile requests per minute per client
+  IP, in addition to the size and timeout settings above. Other backend environment settings
+  are defined in [`backend/app.py`](backend/app.py); those not forwarded by
+  [`docker-compose.yml`](docker-compose.yml) need to be added to its backend environment.
+  Adding them only to `.env` does not pass them into the container.
+- **GitHub import limits**: A selected folder can contain at most 500 files and 7 MiB of
+  decoded content. Pulling replaces local files, and GitHub synchronization is manual.
+- **TeX compatibility**: The Docker image includes many packages and fonts, not every
+  possible dependency. Include custom classes, styles, and fonts in your project, and use
+  XeLaTeX or LuaLaTeX for `fontspec`. Shell escape and project `latexmk` rc files are disabled,
+  so projects requiring external commands or custom build recipes may need adaptation.
+- **Not fully offline by default**: Compilation runs on your server, but the browser loads
+  libraries and fonts from external CDNs. A static-file-only deployment cannot compile PDFs
+  or provide SQLite project persistence.
+
+## Development
+
+The frontend is static HTML/CSS/JavaScript: there is no `package.json`, npm install step,
+or npm build command. Docker builds install the backend requirements and copy the frontend
+assets. For the current checks, run from the repository root:
+
+```bash
+# Requires Node.js LTS; no npm packages needed.
+node frontend/test-warnings.js
+
+# Requires the backend image built in Quick start; uses a disposable test database.
+docker compose run --rm --no-deps -e DB_PATH=/tmp/latex-editor-tests.db backend \
+  pytest --cov=. --cov-report=term-missing -v
 ```
+
+The backend image uses Python 3.11 and dependencies from
+[`backend/requirements.txt`](backend/requirements.txt).
+The [CI workflow](.github/workflows/ci.yml) runs backend tests, frontend checks, uncached
+image builds, and a Compose integration check that compiles a real PDF.
+For API discovery, visit `/api/v1/status`; `/api/v1/settings` reports configured server limits.
+
+## Project structure
+
+```text
 latex-editor/
 ├── frontend/           # Main application
 │   ├── index.html      # HTML structure + project drawer + GitHub modal
@@ -256,14 +340,17 @@ latex-editor/
 │   ├── test_app.py     # Backend API and compiler validation tests
 │   ├── Dockerfile      # Backend container with TeX Live and /data volume
 │   └── requirements.txt
-├── docker-compose.yml  # Container orchestration with backend-data volume
+├── docker-compose.yml  # nginx + backend services and host data bind mount
+├── .env.example        # Supported Compose configuration
 ├── CONTRIBUTING.md     # Contribution guidelines
 └── README.md           # This file
 ```
 
-## 🤝 Contributing
+## Documentation and contributing
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution
+process and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. Use the
+[development commands above](#development) for this implementation.
 
 **Quick start for contributors:**
 
@@ -272,24 +359,10 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 3. Make your changes
 4. Submit a pull request
 
-## 📄 License
+Need help? See [SUPPORT.md](SUPPORT.md). For security reporting and PAT-storage guidance,
+read [SECURITY.md](SECURITY.md). Deployment settings are documented in
+[`.env.example`](.env.example) and [`docker-compose.yml`](docker-compose.yml).
 
-MIT License - see [LICENSE](LICENSE) for details.
+## License
 
-## 🔒 Security
-
-Found a vulnerability? See [SECURITY.md](SECURITY.md) for reporting guidelines.
-
-### Security Features
-
-- **Exact PDF Rendering**: PDF.js renders compiler output instead of executing generated HTML
-- **Restricted Compilation**: Project paths are validated, latexmk rc files and shell escape
-  are disabled, and compiles run as a non-root user with time and memory limits
-- **Content Security Policy**: Nginx enforces CSP headers restricting script/style sources
-- **Rate Limiting**: Backend API endpoints are rate-limited via flask-limiter
-- **Input Validation**: Request body size limits, document count caps, filename sanitization
-- **No Direct Backend Exposure**: Backend is only accessible through the nginx reverse proxy
-
-## 💬 Support
-
-Need help? Check [SUPPORT.md](SUPPORT.md) for resources.
+MIT License. See [LICENSE](LICENSE) for details.
