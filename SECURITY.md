@@ -2,14 +2,12 @@
 
 ## Supported Versions
 
-As this project is in early development, we currently support the following versions with security updates:
+The current security-update support policy is:
 
 | Version | Supported          |
 | ------- | ------------------ |
 | main    | :white_check_mark: |
 | < 1.0   | :x:                |
-
-Once we release version 1.0, this table will be updated to reflect our long-term support policy.
 
 ## Reporting a Vulnerability
 
@@ -19,14 +17,10 @@ We take the security of latex-editor seriously. If you believe you have found a 
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Instead, please report them via one of the following methods:
-
-1. **Preferred**: Use GitHub's private vulnerability reporting feature:
-   - Navigate to the repository's "Security" tab
-   - Click "Report a vulnerability"
-   - Fill out the form with details about the vulnerability
-
-2. **Alternative**: Open a GitHub issue with the title "SECURITY: [Brief Description]" and request private discussion
+Use the repository's enabled
+[GitHub private vulnerability reporting](https://github.com/mbianchidev/latex-editor/security/advisories/new).
+You can also navigate to **Security**, select **Report a vulnerability**, and fill out
+the private report. Do not open a public issue to request a private discussion.
 
 ### What to Include in Your Report
 
@@ -39,6 +33,9 @@ To help us better understand the nature and scope of the issue, please include a
 * Step-by-step instructions to reproduce the issue
 * Proof-of-concept or exploit code (if possible)
 * Impact of the issue, including how an attacker might exploit it
+
+Use synthetic examples and redact tokens, encryption keys, private documents, and other
+sensitive data. Do not attach a real project database or data-directory backup.
 
 ### Response Timeline
 
@@ -67,15 +64,16 @@ When contributing to this project, please:
 * Keep dependencies up to date
 * Run security linters and scanners before submitting PRs
 
-## GitHub PAT Storage
+## Deployment and GitHub PAT Storage
 
-GitHub PATs are encrypted with Fernet before being stored in SQLite. Set
-`GITHUB_TOKEN_ENCRYPTION_KEY` to keep the encryption key separate from the database volume.
-When this variable is unset, latex-editor creates a `0600` key file beside `projects.db`.
+This is a shared trusted-user service, not an authenticated multi-user application.
+Restrict network access and provide authentication/HTTPS at an external proxy before
+exposing it beyond a trusted private environment.
 
-**A backup or copy of the complete data directory contains both the encrypted PAT and the
-generated key.** Use an environment-provided key when the data volume may be copied, shared,
-or backed up outside the trusted host.
+GitHub PATs are encrypted in SQLite. Without an environment-provided encryption key, a
+complete data-directory backup contains both the ciphertext and generated key.
+See [configuration and key custody](docs/configuration.md#github-credential-encryption)
+for the complete setup, backup, and restore guidance.
 
 ## Disclosure Policy
 

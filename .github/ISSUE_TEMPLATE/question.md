@@ -22,7 +22,7 @@ Please provide context for your question:
 
 - **Version**: [e.g., main branch, v1.0.0]
 - **Platform**: [e.g., Windows, macOS, Linux]
-- **Relevant Documentation**: Have you checked the README, CONTRIBUTING.md, or AGENTS.md?
+- **Relevant Documentation**: Have you checked the README, docs/, or CONTRIBUTING.md?
 
 ---
 

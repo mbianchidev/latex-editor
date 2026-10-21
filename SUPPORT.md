@@ -1,112 +1,36 @@
 # Support
 
-Thank you for using latex-editor! This document provides information on how to get help with the project.
+Start with the [documentation index](docs/README.md),
+[installation](docs/installation.md), [user guide](docs/usage.md), and
+[troubleshooting](docs/troubleshooting.md). Developers should use
+[development](docs/development.md) and [architecture](docs/architecture.md).
 
-## Getting Help
+## Ask a question or report a problem
 
-### Documentation
+Search [open and closed issues](https://github.com/mbianchidev/latex-editor/issues) first,
+then use the existing
+[question, bug, or feature template](https://github.com/mbianchidev/latex-editor/issues/new/choose).
+GitHub Discussions is not enabled; issues are the current public help channel.
 
-* **README**: Start with our [README.md](README.md) for an overview and quick start guide
-* **Contributing Guide**: See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and contribution guidelines
-* **Architecture**: Check [AGENTS.md](AGENTS.md) for technical architecture and design decisions
+Include what you are trying to do, a synthetic minimal example, reproduction steps,
+expected/actual behavior, version/commit, OS/browser/container runtime, and redacted errors.
+Do not share private documents, tokens, encryption keys, or database backups.
+See [ACCESSIBILITY.md](ACCESSIBILITY.md) for reporting interface barriers.
 
-### Community Support
+Vulnerabilities must follow [SECURITY.md](SECURITY.md), not public issues.
+Conduct reports use the contact in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-We offer several ways to get help:
+## Scope and response expectations
 
-#### GitHub Discussions (Coming Soon)
+Editor bugs, documentation questions, contribution help, and feature proposals are in scope.
+Custom development and general support for third-party TeX packages are outside the scope.
+For LaTeX questions, try [LaTeX documentation](https://www.latex-project.org/help/documentation/),
+[TeX Stack Exchange](https://tex.stackexchange.com/), or [CTAN](https://www.ctan.org/).
 
-For general questions, ideas, and discussions:
-* Ask questions about usage
-* Share your projects built with latex-editor
-* Discuss potential features
-* Connect with other users
+Support is best-effort and volunteer-maintained. The existing support aim is to acknowledge
+bug reports within 3-5 business days; feature requests are reviewed as capacity allows,
+and community answers to questions may take a few days. Security response expectations
+are separately defined in the security policy.
 
-#### GitHub Issues
-
-For bug reports and feature requests:
-* **Bug Reports**: Use the bug report template to report issues
-* **Feature Requests**: Use the feature request template to suggest new features
-* **Search First**: Before opening a new issue, please search existing issues to avoid duplicates
-
-👉 [Open an Issue](https://github.com/mbianchidev/latex-editor/issues/new/choose)
-
-### Before Asking for Help
-
-To help us help you more efficiently, please:
-
-1. **Check Existing Resources**
-   - Read the README and documentation
-   - Search closed and open issues
-   - Review the FAQ (if available)
-
-2. **Prepare Information**
-   - Describe what you're trying to achieve
-   - Explain what you've already tried
-   - Include error messages or screenshots
-   - Specify your environment (OS, browser, versions)
-
-3. **Provide Context**
-   - Minimal reproducible example
-   - Steps to reproduce the issue
-   - Expected vs actual behavior
-
-## What We Support
-
-### ✅ We Can Help With
-
-* Bug reports with clear reproduction steps
-* Questions about using latex-editor features
-* Clarification on documentation
-* Guidance on contributing to the project
-* Feature requests and enhancement ideas
-
-### ❌ Out of Scope
-
-* Custom development for your specific use case
-* Issues with third-party LaTeX packages
-* General LaTeX syntax questions (see LaTeX resources below)
-* Support for unsupported versions or configurations
-
-## LaTeX Resources
-
-For LaTeX-specific questions, these resources may be helpful:
-
-* [LaTeX Documentation](https://www.latex-project.org/help/documentation/)
-* [TeX Stack Exchange](https://tex.stackexchange.com/)
-* [Overleaf Documentation](https://www.overleaf.com/learn)
-* [CTAN (Comprehensive TeX Archive Network)](https://www.ctan.org/)
-
-## Response Times
-
-This is an open source project maintained by volunteers. Response times may vary:
-
-* **Bug Reports**: We aim to acknowledge within 3-5 business days
-* **Feature Requests**: We review and prioritize regularly
-* **Questions**: Community members usually respond within a few days
-
-For urgent security issues, please follow our [Security Policy](SECURITY.md).
-
-## Contributing
-
-Want to help others? Consider:
-
-* Answering questions in issues and discussions
-* Improving documentation
-* Contributing code fixes
-* Reviewing pull requests
-
-See our [Contributing Guide](CONTRIBUTING.md) to get started.
-
-## Code of Conduct
-
-Please note that all interactions in our community are governed by our [Code of Conduct](CODE_OF_CONDUCT.md). We are committed to providing a welcoming and inclusive environment for everyone.
-
-## Contact
-
-* **Project Maintainer**: [@mbianchidev](https://github.com/mbianchidev)
-* **Repository**: [github.com/mbianchidev/latex-editor](https://github.com/mbianchidev/latex-editor)
-
----
-
-**Note**: This is a community-driven open source project. While we strive to be helpful, please understand that support is provided on a best-effort basis by volunteers.
+Help by answering issues, improving docs, or submitting focused fixes through
+[Contributing](CONTRIBUTING.md). All project interactions follow the Code of Conduct.
