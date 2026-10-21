@@ -15,8 +15,9 @@ safety limits apply.
 
 - **Real PDF preview and export**: PDF.js displays the compiler output, and PDF downloads
   use the same compiled bytes. Export the current `.tex` file or the complete project ZIP too.
-- **Three TeX engines**: Choose pdfLaTeX, XeLaTeX, or LuaLaTeX per project. TeX Live and
-  `latexmk` handle includes, bibliography tools, document classes, images, and fonts.
+- **TeX engine selection**: Choose pdfLaTeX, XeLaTeX, or the LuaLaTeX option per project
+  (see [current limitations](#limits-and-current-scope)). TeX Live and `latexmk` handle
+  includes, bibliography tools, document classes, images, and fonts.
 - **Multi-file workflows**: Start a blank or multi-file project, import a ZIP, and manage
   files and folders in the sidebar. Custom classes such as `russell.cls` can be included.
 - **Persistent projects**: Save, open, rename, and delete projects backed by SQLite.
@@ -299,6 +300,9 @@ it does not migrate existing projects automatically.
   possible dependency. Include custom classes, styles, and fonts in your project, and use
   XeLaTeX or LuaLaTeX for `fontspec`. Shell escape and project `latexmk` rc files are disabled,
   so projects requiring external commands or custom build recipes may need adaptation.
+- **LuaLaTeX caveat**: LuaLaTeX can fail under the current compiler restrictions with a
+  `luaotfload-multiscript.lua` initialization error. Use the default XeLaTeX or pdfLaTeX
+  if you encounter this error.
 - **Not fully offline by default**: Compilation runs on your server, but the browser loads
   libraries and fonts from external CDNs. A static-file-only deployment cannot compile PDFs
   or provide SQLite project persistence.
