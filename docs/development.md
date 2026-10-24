@@ -96,6 +96,12 @@ contains the existing HTTP smoke check, including a real XeLaTeX compile.
 It also runs backend tests, the frontend warning test, and both image builds.
 The [CodeQL workflow](../.github/workflows/codeql.yml) analyzes Actions, JavaScript, and Python.
 
+The Docker build and Compose integration jobs run in parallel after the unit checks pass.
+Both still build without cache; integration waits up to 120 seconds for the existing
+container health checks instead of sleeping for a fixed delay. New pushes to the same PR
+cancel superseded CI and CodeQL runs. Push runs on the default branch and scheduled
+CodeQL scans remain independent. Draft PRs still run all checks and language analyses.
+
 The repository does not currently configure ESLint, Prettier, or a Markdown linter.
 Do not invent npm lint/format commands. Check whitespace with `git diff --check`, verify
 relative documentation links and heading anchors, and match the surrounding formatting.
