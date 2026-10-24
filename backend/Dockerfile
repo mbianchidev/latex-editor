@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.15.1-slim
 
 WORKDIR /app
 
@@ -23,7 +23,7 @@ RUN apt-get update && \
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir --upgrade pip==26.1.2 && \
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2.2 && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy application code

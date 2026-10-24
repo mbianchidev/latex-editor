@@ -4,9 +4,10 @@
 
 ## Toolchain and setup
 
-Use Git, Docker/Compose with Linux containers, a browser, and Node.js LTS for the small
-frontend test. The backend image uses Python 3.11; native Python development should use
-that version with a virtual environment. The frontend is static HTML/CSS/JavaScript.
+Use Git, Docker/Compose with Linux containers, a browser, and Node.js 26.12.1 for the small
+frontend test. CI selects that Node.js version explicitly; it is not a production runtime.
+The backend image and CI use Python 3.15.1; native Python development should use that
+version with a virtual environment. The frontend is static HTML/CSS/JavaScript.
 There is no `package.json`, npm install/build command, Vite setup, or frontend bundler.
 
 Fork the repository, clone your fork, and create a focused branch based on `main`.
@@ -32,7 +33,7 @@ Stop only your own development stack with `docker compose down --remove-orphans`
 This is useful for Flask API tests without repeatedly building TeX Live:
 
 ```bash
-python3.11 -m venv .venv
+python3.15 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r backend/requirements.txt
 ```
