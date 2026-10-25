@@ -20,8 +20,8 @@ not a public issue.
 ## Development setup
 
 Fork the repository, clone your fork, and create a feature branch from `main`.
-The full environment uses Docker/Compose with Linux containers; Node.js LTS runs the
-dependency-free frontend test. Python 3.11 is needed only for native backend development.
+The full environment uses Docker/Compose with Linux containers; Node.js 26.12.1 runs the
+dependency-free frontend test. Python 3.15.1 is needed only for native backend development.
 There is no npm installation/build step.
 
 Follow [development and testing](docs/development.md) for exact setup, dependency installation,
