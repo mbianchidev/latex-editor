@@ -1,3 +1,5 @@
+<img src="docs/assets/logo.svg" width="96" height="96" alt="LaTeX Editor logo">
+
 # LaTeX Editor
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)

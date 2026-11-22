@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="LaTeX Editor">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#14161B"/>
+  <rect x="10" y="13" width="44" height="38" rx="5" fill="#1F2430" stroke="#F5F7F8" stroke-width="3"/>
+  <path d="M32 13v38" stroke="#F5F7F8" stroke-width="3"/>
+  <path d="m17 23 9 18" stroke="#FB7185" stroke-width="4" stroke-linecap="round"/>
+  <path d="M38 23h10M38 30h10M38 37h7" stroke="#F5F7F8" stroke-width="3" stroke-linecap="round"/>
+</svg>
